@@ -1,0 +1,6 @@
+{
+  "name": "Havenfold",
+  "description": "A cozy settlement survival and city-builder simulation inspired by Outlanders gameplay.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
