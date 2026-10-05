@@ -191,6 +191,9 @@ data class Building(
 ) {
     val isFullyStockedForBuild: Boolean
         get() = deliveredWood >= type.woodCost && deliveredStone >= type.stoneCost
+
+    fun insideResidentsCount(villagers: List<Villager>): Int =
+        villagers.count { it.homeBuildingId == id && it.isInHome }
 }
 
 enum class ResourceType(val label: String, val iconEmoji: String) {
@@ -218,6 +221,12 @@ enum class JobType(val title: String, val iconEmoji: String, val color: Color) {
     WOODCUTTER("Penebang Kayu", "🪓", Color(0xFF5E8B4E)),
     MINER("Pengumpul Batu", "⛏️", Color(0xFF607D8B)),
     FORAGER("Pengumpul Beri", "🫐", Color(0xFF7E57C2))
+}
+
+enum class JobPriority(val label: String, val color: Color) {
+    HIGH("Tinggi", Color(0xFFE53935)),
+    MEDIUM("Sedang", Color(0xFFFB8C00)),
+    LOW("Rendah", Color(0xFF43A047))
 }
 
 enum class VillagerAction(val label: String, val emoji: String) {
@@ -249,7 +258,7 @@ data class Villager(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
     val isFemale: Boolean,
-    val ageDays: Float, // Age in simulation days (0..14: Anak, 15..54: Dewasa, 55+: Lansia)
+    val ageDays: Float, // Age in simulation days (0..3.9: Bayi, 4..14.9: Anak, 15..54.9: Dewasa, 55+: Lansia)
     // Modular Needs System (0..100)
     val hunger: Float = 100f,         // 100: kenyang, 0: kelaparan hebat
     val housingNeed: Float = 100f,    // 100: hunian nyaman, 0: terlantar tanpa rumah
@@ -258,6 +267,7 @@ data class Villager(
     val energy: Float = 100f,         // 100: berenergi, 0: kelelahan
     val job: JobType = JobType.UNASSIGNED,
     val homeBuildingId: String? = null,
+    val isInHome: Boolean = false,    // True saat penduduk berada di dalam rumah untuk istirahat malam
     val assignedBuildingId: String? = null,
     val action: VillagerAction = VillagerAction.IDLE,
     val carryingType: CarryType = CarryType.NONE,
@@ -268,16 +278,20 @@ data class Villager(
     val targetTileY: Int? = null,
     val path: List<Pair<Int, Int>> = emptyList(),
     val partnerId: String? = null,
+    val parentIds: List<String> = emptyList(),
+    val childrenIds: List<String> = emptyList(),
     val tunicColorHex: Long = 0xFF5D9CEC,
     val statusMessage: String = "Merasa damai di Havenfold"
 ) {
-    val isChild: Boolean get() = ageDays < 15f
+    val isBaby: Boolean get() = ageDays < 4f
+    val isChild: Boolean get() = ageDays in 4f..14.99f
     val isElder: Boolean get() = ageDays >= 55f
-    val isAdult: Boolean get() = ageDays in 15f..54.9f
-    val canWork: Boolean get() = isAdult || (isElder && hunger > 20f)
+    val isAdult: Boolean get() = ageDays in 15f..54.99f
+    val canWork: Boolean get() = (isAdult || (isElder && hunger > 20f)) && !isBaby && !isChild
 
     val lifeStageLabel: String
         get() = when {
+            isBaby -> "Bayi"
             isChild -> "Anak-anak"
             isElder -> "Lansia"
             else -> "Dewasa"
@@ -324,6 +338,19 @@ enum class GameSpeed(val multiplier: Float, val label: String) {
     NORMAL(1f, "1× (Normal)"),
     FAST(2f, "2× (Cepat)"),
     TURBO(3.5f, "3.5× (Kilat)")
+}
+
+enum class WeatherType(
+    val label: String,
+    val iconEmoji: String,
+    val cropGrowthModifier: Float,
+    val speedModifier: Float,
+    val description: String
+) {
+    CLEAR("Cerah Berawan", "☀️", 1.0f, 1.0f, "Cuaca cerah menyenangkan, warga bekerja dengan ritme normal."),
+    CLOUDY("Mendung Teduh", "⛅", 1.0f, 1.0f, "Awan sejuk menutupi langit, udara nyaman untuk beraktivitas."),
+    RAIN("Hujan Rintik", "🌧️", 1.5f, 0.9f, "Menyuburkan tanah dan mempercepat pertumbuhan ladang (+50%)."),
+    HEAT("Kemarau Terik", "🌡️", 0.85f, 0.95f, "Cuaca terik hangat, tanaman butuh perhatian ekstra.")
 }
 
 enum class DayPhase(val label: String, val icon: String, val skyColor: Color, val ambientLight: Float) {

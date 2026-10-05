@@ -1,6 +1,7 @@
 package com.example.game.pathfinding
 
 import com.example.game.model.Building
+import com.example.game.model.BuildingType
 import com.example.game.model.NaturalResource
 import com.example.game.model.ResourceType
 import com.example.game.model.TileType
@@ -30,13 +31,16 @@ object GridPathfinder {
     ): List<Pair<Int, Int>> {
         if (startX == destX && startY == destY) return emptyList()
 
-        val clampedStartX = startX.coerceIn(0, MAP_SIZE - 1)
-        val clampedStartY = startY.coerceIn(0, MAP_SIZE - 1)
-        val clampedDestX = destX.coerceIn(0, MAP_SIZE - 1)
-        val clampedDestY = destY.coerceIn(0, MAP_SIZE - 1)
+        val mapWidth = tiles.size
+        val mapHeight = if (tiles.isNotEmpty()) tiles[0].size else MAP_SIZE
+
+        val clampedStartX = startX.coerceIn(0, mapWidth - 1)
+        val clampedStartY = startY.coerceIn(0, mapHeight - 1)
+        val clampedDestX = destX.coerceIn(0, mapWidth - 1)
+        val clampedDestY = destY.coerceIn(0, mapHeight - 1)
 
         val queue = ArrayDeque<Pair<Int, Int>>()
-        val visited = Array(MAP_SIZE) { BooleanArray(MAP_SIZE) }
+        val visited = Array(mapWidth) { BooleanArray(mapHeight) }
         val parent = HashMap<Pair<Int, Int>, Pair<Int, Int>>()
 
         val start = Pair(clampedStartX, clampedStartY)
@@ -71,7 +75,7 @@ object GridPathfinder {
                 val nx = current.first + dir.first
                 val ny = current.second + dir.second
 
-                if (nx in 0 until MAP_SIZE && ny in 0 until MAP_SIZE && !visited[nx][ny]) {
+                if (nx in 0 until mapWidth && ny in 0 until mapHeight && !visited[nx][ny]) {
                     val isGoalCell = (nx == clampedDestX && ny == clampedDestY)
                     val walkable = isTileWalkable(nx, ny, tiles, buildings, resources) || (isGoalCell && allowTargetBlocked)
 
@@ -108,7 +112,9 @@ object GridPathfinder {
         buildings: List<Building>,
         resources: List<NaturalResource>
     ): Boolean {
-        if (x !in 0 until MAP_SIZE || y !in 0 until MAP_SIZE) return false
+        val mapWidth = tiles.size
+        val mapHeight = if (tiles.isNotEmpty()) tiles[0].size else MAP_SIZE
+        if (x !in 0 until mapWidth || y !in 0 until mapHeight) return false
 
         val tile = tiles[x][y]
         if (!tile.type.isWalkable) return false
@@ -120,12 +126,8 @@ object GridPathfinder {
         // Solid buildings block movement, but Farm fields and Town hearth center are walkable
         for (b in buildings) {
             if (x in b.x until (b.x + b.type.width) && y in b.y until (b.y + b.type.height)) {
-                // Farms are always walkable so farmers can till and harvest
-                if (b.type.title.contains("Ladang") || b.type.title.contains("Kebun")) {
-                    return true
-                }
-                // Town center is walkable
-                if (b.type.title.contains("Pusat Desa")) {
+                // Farms and Town Hearth center are walkable
+                if (b.type == BuildingType.WHEAT_FIELD || b.type == BuildingType.PUMPKIN_PATCH || b.type == BuildingType.TOWN_HEARTH) {
                     return true
                 }
                 // Other completed buildings are solid
@@ -143,10 +145,12 @@ object GridPathfinder {
         buildings: List<Building>,
         resources: List<NaturalResource>
     ): Pair<Int, Int>? {
+        val mapWidth = tiles.size
+        val mapHeight = if (tiles.isNotEmpty()) tiles[0].size else MAP_SIZE
         for (dir in DIRECTIONS) {
             val nx = targetX + dir.first
             val ny = targetY + dir.second
-            if (nx in 0 until MAP_SIZE && ny in 0 until MAP_SIZE) {
+            if (nx in 0 until mapWidth && ny in 0 until mapHeight) {
                 if (isTileWalkable(nx, ny, tiles, buildings, resources)) {
                     return Pair(nx, ny)
                 }

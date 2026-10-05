@@ -41,6 +41,7 @@ import com.example.game.model.ResourceType
 import com.example.game.model.TileType
 import com.example.game.model.Villager
 import com.example.game.model.VillagerAction
+import com.example.game.model.WeatherType
 import kotlin.math.sin
 
 @Composable
@@ -48,6 +49,7 @@ fun WorldCanvas(
     gameState: GameState,
     onTileTap: (Int, Int) -> Unit,
     onVillagerTap: (String) -> Unit,
+    onDoubleTap: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var panOffsetX by remember { mutableFloatStateOf(100f) }
@@ -81,28 +83,33 @@ fun WorldCanvas(
                 }
             }
             .pointerInput(zoomScale, panOffsetX, panOffsetY, gameState.pendingBuildType) {
-                detectTapGestures { tapOffset ->
-                    val clickedTileX = ((tapOffset.x - panOffsetX) / tileSize).toInt()
-                    val clickedTileY = ((tapOffset.y - panOffsetY) / tileSize).toInt()
+                detectTapGestures(
+                    onDoubleTap = {
+                        onDoubleTap()
+                    },
+                    onTap = { tapOffset ->
+                        val clickedTileX = ((tapOffset.x - panOffsetX) / tileSize).toInt()
+                        val clickedTileY = ((tapOffset.y - panOffsetY) / tileSize).toInt()
 
-                    if (clickedTileX in 0 until SimulationEngine.MAP_SIZE &&
-                        clickedTileY in 0 until SimulationEngine.MAP_SIZE
-                    ) {
-                        // Check if a villager is near the tap point
-                        val tappedVillager = gameState.villagers.find {
-                            val vx = panOffsetX + it.posX * tileSize + tileSize * 0.5f
-                            val vy = panOffsetY + it.posY * tileSize + tileSize * 0.5f
-                            val dist = Math.hypot((tapOffset.x - vx).toDouble(), (tapOffset.y - vy).toDouble())
-                            dist < tileSize * 0.75
-                        }
+                        if (clickedTileX in 0 until SimulationEngine.MAP_SIZE &&
+                            clickedTileY in 0 until SimulationEngine.MAP_SIZE
+                        ) {
+                            // Check if a villager is near the tap point
+                            val tappedVillager = gameState.villagers.find {
+                                val vx = panOffsetX + it.posX * tileSize + tileSize * 0.5f
+                                val vy = panOffsetY + it.posY * tileSize + tileSize * 0.5f
+                                val dist = Math.hypot((tapOffset.x - vx).toDouble(), (tapOffset.y - vy).toDouble())
+                                dist < tileSize * 0.75
+                            }
 
-                        if (tappedVillager != null && gameState.pendingBuildType == null) {
-                            onVillagerTap(tappedVillager.id)
-                        } else {
-                            onTileTap(clickedTileX, clickedTileY)
+                            if (tappedVillager != null && gameState.pendingBuildType == null) {
+                                onVillagerTap(tappedVillager.id)
+                            } else {
+                                onTileTap(clickedTileX, clickedTileY)
+                            }
                         }
                     }
-                }
+                )
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -149,8 +156,9 @@ fun WorldCanvas(
                 drawBuilding(building, bx, by, tileSize, waveAnim, gameState.timeSystem.phase)
             }
 
-            // 4. Draw Villagers
+            // 4. Draw Villagers (Only if outdoor, villagers resting inside houses are concealed)
             for (v in gameState.villagers) {
+                if (v.isInHome) continue
                 val vx = panOffsetX + v.posX * tileSize
                 val vy = panOffsetY + v.posY * tileSize
                 val isSelected = v.id == gameState.selectedVillagerId
@@ -194,7 +202,15 @@ fun WorldCanvas(
                 )
             }
 
-            // 7. Day / Night Atmosphere Lighting Overlay
+            // 7. Weather Atmosphere Tint
+            when (gameState.weather) {
+                WeatherType.RAIN -> drawRect(color = Color(0x241565C0), size = size)
+                WeatherType.HEAT -> drawRect(color = Color(0x18FF8F00), size = size)
+                WeatherType.CLOUDY -> drawRect(color = Color(0x1837474F), size = size)
+                WeatherType.CLEAR -> {}
+            }
+
+            // 8. Day / Night Atmosphere Lighting Overlay
             drawAtmosphereOverlay(
                 phase = gameState.timeSystem.phase,
                 progress = gameState.timeSystem.progressOfDay,

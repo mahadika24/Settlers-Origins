@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -47,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import com.example.game.model.Building
 import com.example.game.model.BuildingType
 import com.example.game.model.CommunityGoal
+import com.example.game.model.JobPriority
 import com.example.game.model.JobType
 import com.example.game.model.VillageInventory
 import com.example.game.model.Villager
@@ -60,21 +62,18 @@ fun BuildCatalogSheet(
     onSelectBuilding: (BuildingType) -> Unit,
     onDismiss: () -> Unit
 ) {
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .testTag("build_catalog_sheet"),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF8)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)
+            .padding(horizontal = 20.dp, vertical = 6.dp)
+            .navigationBarsPadding()
+            .testTag("build_catalog_sheet")
     ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
                 Column {
                     Text(
                         text = "🏗️ Katalog Pembangunan",
@@ -179,7 +178,6 @@ fun BuildCatalogSheet(
                 }
             }
         }
-    }
 }
 
 /**
@@ -188,120 +186,221 @@ fun BuildCatalogSheet(
 @Composable
 fun JobAssignmentSheet(
     villagers: List<Villager>,
+    buildings: List<Building> = emptyList(),
+    isAutoAssign: Boolean = false,
+    jobPriorities: Map<JobType, JobPriority> = emptyMap(),
+    onToggleAutoAssign: () -> Unit = {},
+    onSetJobPriority: (JobType, JobPriority) -> Unit = { _, _ -> },
     onAdjustJobCount: (JobType, Int) -> Unit,
     onDismiss: () -> Unit
 ) {
     val ableWorkers = villagers.filter { it.canWork }
     val unassignedCount = ableWorkers.count { it.job == JobType.UNASSIGNED }
 
-    Card(
+    // Calculate job capacities based on settlement structures
+    val farmCapacity = buildings.count { (it.type == BuildingType.WHEAT_FIELD || it.type == BuildingType.PUMPKIN_PATCH) && it.isConstructed } * 2
+    val woodcutterCapacity = buildings.count { it.type == BuildingType.WOODCUTTER_CAMP && it.isConstructed } * 2
+    val minerCapacity = buildings.count { it.type == BuildingType.STONE_QUARRY && it.isConstructed } * 2
+    val foragerCapacity = buildings.count { it.type == BuildingType.FORAGER_HUT && it.isConstructed } * 2
+    val builderCapacity = maxOf(buildings.count { !it.isConstructed } * 2, 2)
+
+    val capacities = mapOf(
+        JobType.FARMER to farmCapacity,
+        JobType.WOODCUTTER to woodcutterCapacity,
+        JobType.MINER to minerCapacity,
+        JobType.BUILDER to builderCapacity,
+        JobType.FORAGER to foragerCapacity
+    )
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .testTag("job_assignment_sheet"),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF8)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)
+            .padding(horizontal = 20.dp, vertical = 6.dp)
+            .navigationBarsPadding()
+            .testTag("job_assignment_sheet")
     ) {
-        Column(modifier = Modifier.padding(18.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "📋 Alokasi Pekerjaan Warga",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF2C3E50)
+                )
+                Text(
+                    text = "Tenaga Kerja Siap: ${ableWorkers.size} | Warga Bebas: $unassignedCount",
+                    fontSize = 12.sp,
+                    color = Color(0xFF2E7D32),
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.testTag("close_jobs_sheet")) {
+                Icon(Icons.Default.Close, contentDescription = "Tutup")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Auto-Assign / Manual Priority Switch Bar
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = if (isAutoAssign) Color(0xFFE8F5E9) else Color(0xFFFFF3E0),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onToggleAutoAssign() }
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "📋 Alokasi Pekerjaan Warga",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF2C3E50)
-                    )
-                    Text(
-                        text = "Tenaga Kerja Siap: ${ableWorkers.size} | Warga Bebas: $unassignedCount",
-                        fontSize = 12.sp,
-                        color = Color(0xFF2E7D32),
-                        fontWeight = FontWeight.SemiBold
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = if (isAutoAssign) "⚖️" else "🖐️", fontSize = 16.sp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = if (isAutoAssign) "Mode: Penugasan Otomatis (Auto-Assign)" else "Mode: Distribusi Prioritas Manual",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = if (isAutoAssign) Color(0xFF2E7D32) else Color(0xFFE65100)
+                        )
+                        Text(
+                            text = if (isAutoAssign) "AI otomatis mengisi posisi krusial desa" else "Pemain menentukan alokasi dan prioritas pekerjaan",
+                            fontSize = 10.sp,
+                            color = Color(0xFF607D8B)
+                        )
+                    }
                 }
-                IconButton(onClick = onDismiss, modifier = Modifier.testTag("close_jobs_sheet")) {
-                    Icon(Icons.Default.Close, contentDescription = "Tutup")
+                FilledTonalButton(
+                    onClick = onToggleAutoAssign,
+                    modifier = Modifier.height(30.dp)
+                ) {
+                    Text(text = if (isAutoAssign) "Manual" else "Auto", fontSize = 10.sp)
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-            val jobs = listOf(
-                JobType.FARMER,
-                JobType.WOODCUTTER,
-                JobType.MINER,
-                JobType.BUILDER,
-                JobType.FORAGER
-            )
+        val jobs = listOf(
+            JobType.FARMER,
+            JobType.WOODCUTTER,
+            JobType.MINER,
+            JobType.BUILDER,
+            JobType.FORAGER
+        )
 
-            for (job in jobs) {
-                val currentAssigned = ableWorkers.count { it.job == job }
+        for (job in jobs) {
+            val currentAssigned = ableWorkers.count { it.job == job }
+            val cap = capacities[job] ?: 2
+            val prio = jobPriorities[job] ?: JobPriority.MEDIUM
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp)
-                        .background(Color(0xFFF7F4EC), RoundedCornerShape(14.dp))
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = job.iconEmoji, fontSize = 24.sp)
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .background(Color(0xFFF7F4EC), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Text(text = job.iconEmoji, fontSize = 22.sp)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = job.title,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
+                                fontSize = 13.sp,
                                 color = Color(0xFF2C3E50)
                             )
-                            val desc = when (job) {
-                                JobType.FARMER -> "Menanam & memanen bahan pangan"
-                                JobType.WOODCUTTER -> "Menebang pohon & suplai kayu"
-                                JobType.MINER -> "Mengumpulkan & memahat batu di Tempat Pengumpulan Batu"
-                                JobType.BUILDER -> "Mendirikan bangunan desa"
-                                JobType.FORAGER -> "Memetik buah beri & tanaman liar"
-                                else -> ""
+                            Spacer(modifier = Modifier.width(6.dp))
+                            // Priority badge button
+                            Box(
+                                modifier = Modifier
+                                    .background(prio.color.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        val nextPrio = when (prio) {
+                                            JobPriority.HIGH -> JobPriority.MEDIUM
+                                            JobPriority.MEDIUM -> JobPriority.LOW
+                                            JobPriority.LOW -> JobPriority.HIGH
+                                        }
+                                        onSetJobPriority(job, nextPrio)
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = prio.label,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = prio.color
+                                )
                             }
+                        }
+                        val desc = when (job) {
+                            JobType.FARMER -> "Menanam & memanen pangan"
+                            JobType.WOODCUTTER -> "Menebang pohon & kayu"
+                            JobType.MINER -> "Memahat batu di Tempat Batu"
+                            JobType.BUILDER -> "Mendirikan bangunan desa"
+                            JobType.FORAGER -> "Memetik buah beri hutan"
+                            else -> ""
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(text = desc, fontSize = 10.sp, color = Color(0xFF7F8C8D))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            if (cap > 0 && currentAssigned == 0) {
+                                Text(text = "• ⚠️ Kosong", fontSize = 9.sp, color = Color(0xFFC62828), fontWeight = FontWeight.Bold)
+                            } else if (cap > 0 && currentAssigned < cap) {
+                                Text(text = "• ⚠️ Kurang (${cap - currentAssigned})", fontSize = 9.sp, color = Color(0xFFE65100), fontWeight = FontWeight.Medium)
+                            } else if (cap > 0 && currentAssigned == cap) {
+                                Text(text = "• ✅ Penuh", fontSize = 9.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
+                            } else if (cap > 0 && currentAssigned > cap) {
+                                Text(text = "• ⚠️ Kelebihan", fontSize = 9.sp, color = Color(0xFFC62828), fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
+                }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = { onAdjustJobCount(job, currentAssigned - 1) },
-                            enabled = currentAssigned > 0,
-                            modifier = Modifier
-                                .size(34.dp)
-                                .background(Color.White, CircleShape)
-                                .testTag("btn_decrease_${job.name.lowercase()}")
-                        ) {
-                            Icon(Icons.Default.Remove, contentDescription = "Kurang", tint = Color(0xFFC62828))
-                        }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { onAdjustJobCount(job, currentAssigned - 1) },
+                        enabled = currentAssigned > 0,
+                        modifier = Modifier
+                            .size(30.dp)
+                            .background(Color.White, CircleShape)
+                            .testTag("btn_decrease_${job.name.lowercase()}")
+                    ) {
+                        Icon(Icons.Default.Remove, contentDescription = "Kurang", tint = Color(0xFFC62828))
+                    }
 
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 8.dp)) {
                         Text(
-                            text = "$currentAssigned",
-                            fontSize = 16.sp,
+                            text = "$currentAssigned / $cap",
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 12.dp),
                             color = Color(0xFF2C3E50)
                         )
+                        Text(
+                            text = "pekerja",
+                            fontSize = 8.sp,
+                            color = Color(0xFF90A4AE)
+                        )
+                    }
 
-                        IconButton(
-                            onClick = { onAdjustJobCount(job, currentAssigned + 1) },
-                            enabled = unassignedCount > 0,
-                            modifier = Modifier
-                                .size(34.dp)
-                                .background(Color.White, CircleShape)
-                                .testTag("btn_increase_${job.name.lowercase()}")
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "Tambah", tint = Color(0xFF2E7D32))
-                        }
+                    IconButton(
+                        onClick = { onAdjustJobCount(job, currentAssigned + 1) },
+                        enabled = unassignedCount > 0 && currentAssigned < cap,
+                        modifier = Modifier
+                            .size(30.dp)
+                            .background(Color.White, CircleShape)
+                            .testTag("btn_increase_${job.name.lowercase()}")
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Tambah", tint = Color(0xFF2E7D32))
                     }
                 }
             }
@@ -318,21 +417,18 @@ fun VillagersRosterSheet(
     onSelectVillager: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .testTag("roster_sheet"),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF8)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)
+            .padding(horizontal = 20.dp, vertical = 6.dp)
+            .navigationBarsPadding()
+            .testTag("roster_sheet")
     ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
                 Column {
                     Text(
                         text = "👥 Direktori Penduduk (${villagers.size})",
@@ -444,7 +540,6 @@ fun VillagersRosterSheet(
                 }
             }
         }
-    }
 }
 
 /**
@@ -456,21 +551,18 @@ fun CommunityGoalsSheet(
     events: List<com.example.game.model.SimulationEvent>,
     onDismiss: () -> Unit
 ) {
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .testTag("goals_sheet"),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFDF8)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)
+            .padding(horizontal = 20.dp, vertical = 6.dp)
+            .navigationBarsPadding()
+            .testTag("goals_sheet")
     ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
                 Column {
                     Text(
                         text = "📜 Catatan & Misi Desa",
@@ -582,7 +674,6 @@ fun CommunityGoalsSheet(
                 }
             }
         }
-    }
 }
 
 /**
@@ -630,10 +721,24 @@ fun VillagerInspectorCard(
                             color = Color(0xFF2C3E50)
                         )
                         Text(
-                            text = "${villager.lifeStageLabel} • Usia ${villager.ageDays.toInt()} Tahun",
+                            text = "${villager.lifeStageLabel} • Usia ${villager.ageDays.toInt()} Hari",
                             fontSize = 12.sp,
                             color = Color(0xFF7F8C8D)
                         )
+                        val familyDesc = buildString {
+                            if (villager.isInHome) append("🏠 Di dalam rumah • ")
+                            if (villager.partnerId != null) append("❤️ Berpasangan • ")
+                            if (villager.childrenIds.isNotEmpty()) append("👶 ${villager.childrenIds.size} Anak • ")
+                            if (villager.homeBuildingId == null) append("⚠️ Tuna Wisma")
+                        }.trimEnd(' ', '•')
+                        if (familyDesc.isNotEmpty()) {
+                            Text(
+                                text = familyDesc,
+                                fontSize = 10.sp,
+                                color = Color(0xFF3F51B5),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
                 IconButton(onClick = onClose, modifier = Modifier.testTag("close_inspector")) {

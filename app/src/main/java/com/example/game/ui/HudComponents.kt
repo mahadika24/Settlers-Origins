@@ -93,8 +93,8 @@ fun TopHudBar(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "${time.phase.icon} ${time.clockString} • ${time.phase.label}",
-                        fontSize = 12.sp,
+                        text = "${time.phase.icon} ${time.clockString} • ${gameState.weather.iconEmoji} ${gameState.weather.label}",
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                         color = Color(0xFF37474F)
                     )
