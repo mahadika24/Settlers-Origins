@@ -1,6 +1,7 @@
 package com.example.game.engine.systems
 
 import com.example.game.model.Building
+import com.example.game.model.BuildingStatus
 import com.example.game.model.BuildingType
 import com.example.game.model.CarryType
 import com.example.game.model.JobType
@@ -17,7 +18,7 @@ import kotlin.random.Random
 /**
  * Modular AI Behavior & Decision System
  * Implements local Utility AI / State Machine for villager needs, routines,
- * job workflows, and path progression.
+ * persistent workplace job execution, physical logistics, and construction/demolition.
  */
 object AiBehaviorSystem {
 
@@ -26,10 +27,14 @@ object AiBehaviorSystem {
         val updatedBuildings: List<Building>,
         val updatedResources: List<NaturalResource>,
         val updatedInventory: VillageInventory,
+        val updatedTiles: Array<Array<WorldTile>>,
         val foodHarvestedDelta: Int,
         val woodHarvestedDelta: Int,
         val stoneHarvestedDelta: Int,
-        val newBuildingCompleted: Building?
+        val newBuildingCompleted: Building?,
+        val demolishedBuilding: Building? = null,
+        val woodSalvagedDelta: Int = 0,
+        val stoneSalvagedDelta: Int = 0
     )
 
     fun tickAi(
@@ -45,17 +50,21 @@ object AiBehaviorSystem {
         var currentInv = inventory
         var currentBuildings = buildings
         var currentResources = resources
+        var currentTiles = tiles
         var foodDelta = 0
         var woodDelta = 0
         var stoneDelta = 0
         var completedBuilding: Building? = null
+        var demolishedBuildingResult: Building? = null
+        var woodSalvagedTotal = 0
+        var stoneSalvagedTotal = 0
 
-        val granary = currentBuildings.find { it.type == BuildingType.GRANARY && it.isConstructed }
+        val granary = currentBuildings.find { it.type == BuildingType.GRANARY && it.isConstructed && !it.isDemolishing }
         val townHearth = currentBuildings.find { it.type == BuildingType.TOWN_HEARTH }
         val storagePoint = granary ?: townHearth ?: Building(type = BuildingType.TOWN_HEARTH, x = 10, y = 10)
 
-        val recreationPark = currentBuildings.find { it.type == BuildingType.RECREATION_PARK && it.isConstructed }
-        val communityPlaza = currentBuildings.find { it.type == BuildingType.COMMUNITY_PLAZA && it.isConstructed }
+        val recreationPark = currentBuildings.find { it.type == BuildingType.RECREATION_PARK && it.isConstructed && !it.isDemolishing }
+        val communityPlaza = currentBuildings.find { it.type == BuildingType.COMMUNITY_PLAZA && it.isConstructed && !it.isDemolishing }
 
         val updatedVillagers = mutableListOf<Villager>()
 
@@ -68,10 +77,10 @@ object AiBehaviorSystem {
 
             var v = villager
 
-            // 1. Check if carrying goods -> Must deliver to storage
+            // 1. Check if carrying goods -> Must physically deliver to storage
             if (v.carryingType != CarryType.NONE && v.carryingAmount > 0) {
                 val delRes = ResourceLogisticsSystem.processDelivery(
-                    v, currentBuildings, currentResources, tiles, currentInv, storagePoint
+                    v, currentBuildings, currentResources, currentTiles, currentInv, storagePoint
                 )
                 v = delRes.updatedVillager
                 currentInv = delRes.updatedInventory
@@ -93,7 +102,7 @@ object AiBehaviorSystem {
                     val path = GridPathfinder.findPath(
                         v.posX.toInt(), v.posY.toInt(),
                         storagePoint.x, storagePoint.y,
-                        tiles, currentBuildings, currentResources
+                        currentTiles, currentBuildings, currentResources
                     )
                     v = v.copy(
                         action = VillagerAction.WALKING_TO,
@@ -114,7 +123,7 @@ object AiBehaviorSystem {
                     val path = GridPathfinder.findPath(
                         v.posX.toInt(), v.posY.toInt(),
                         recreationPark.x, recreationPark.y,
-                        tiles, currentBuildings, currentResources
+                        currentTiles, currentBuildings, currentResources
                     )
                     v = v.copy(action = VillagerAction.WALKING_TO, path = path, statusMessage = "Menuju taman untuk berekreasi")
                 }
@@ -135,7 +144,7 @@ object AiBehaviorSystem {
                     val path = GridPathfinder.findPath(
                         v.posX.toInt(), v.posY.toInt(),
                         sx, sy,
-                        tiles, currentBuildings, currentResources
+                        currentTiles, currentBuildings, currentResources
                     )
                     v = v.copy(action = VillagerAction.WALKING_TO, path = path, statusMessage = "Menuju balai pertemuan warga")
                 }
@@ -151,19 +160,24 @@ object AiBehaviorSystem {
                     v = v.copy(action = VillagerAction.IDLE, statusMessage = "Hati terasa terhubung dengan warga")
                 }
             }
-            // 6. Work Duties (Only during Daytime and when canWork is true)
+            // 6. Work Duties (Daytime and when canWork is true)
             else if (v.canWork && !timeSystem.isNight) {
                 when (v.job) {
                     JobType.FARMER -> {
+                        // Farmer must work on their specific assigned farm
                         val farm = currentBuildings.find {
-                            (it.type == BuildingType.WHEAT_FIELD || it.type == BuildingType.PUMPKIN_PATCH) && it.isConstructed
+                            it.id == v.assignedBuildingId &&
+                            (it.type == BuildingType.WHEAT_FIELD || it.type == BuildingType.PUMPKIN_PATCH) &&
+                            it.isConstructed &&
+                            !it.isDemolishing
                         }
+
                         if (farm != null) {
                             val dist = Math.abs(v.posX - farm.x) + Math.abs(v.posY - farm.y)
                             if (dist <= 1.8f) {
                                 if (!farm.isTilled) {
                                     currentBuildings = FarmingSystem.tillField(farm.id, currentBuildings)
-                                    v = v.copy(action = VillagerAction.TILLING, statusMessage = "Menggemburkan tanah & menabur benih")
+                                    v = v.copy(action = VillagerAction.TILLING, statusMessage = "Menggemburkan tanah & menabur benih di ladang ${farm.type.title}")
                                 } else if (farm.cropGrowth >= 100f) {
                                     val (newBld, harvested) = FarmingSystem.harvestField(farm.id, currentBuildings)
                                     currentBuildings = newBld
@@ -174,97 +188,155 @@ object AiBehaviorSystem {
                                         statusMessage = "Memanen hasil pertanian segar ($harvested pangan)!"
                                     )
                                 } else {
-                                    v = v.copy(action = VillagerAction.TILLING, statusMessage = "Merawat tanaman (${farm.cropGrowth.toInt()}%)")
+                                    v = v.copy(action = VillagerAction.TILLING, statusMessage = "Merawat tanaman di ladang (${farm.cropGrowth.toInt()}%)")
                                 }
                             } else if (v.path.isEmpty()) {
                                 val path = GridPathfinder.findPath(
                                     v.posX.toInt(), v.posY.toInt(),
                                     farm.x, farm.y,
-                                    tiles, currentBuildings, currentResources
+                                    currentTiles, currentBuildings, currentResources
                                 )
-                                v = v.copy(action = VillagerAction.WALKING_TO, path = path, statusMessage = "Berangkat ke ladang tani")
+                                v = v.copy(action = VillagerAction.WALKING_TO, path = path, statusMessage = "Berangkat ke ladang binaannya")
                             }
                         } else {
-                            v = wanderAround(v, tiles, currentBuildings, currentResources, mapSize)
+                            v = wanderAround(v, currentTiles, currentBuildings, currentResources, mapSize)
                         }
                     }
 
                     JobType.WOODCUTTER -> {
+                        val camp = currentBuildings.find {
+                            it.id == v.assignedBuildingId &&
+                            it.type == BuildingType.WOODCUTTER_CAMP &&
+                            it.isConstructed &&
+                            !it.isDemolishing
+                        }
+
+                        val refX = camp?.x ?: v.posX.toInt()
+                        val refY = camp?.y ?: v.posY.toInt()
                         val tree = currentResources.filter { it.type == ResourceType.TREE && it.growthStage == 2 }
-                            .minByOrNull { Math.abs(it.x - v.posX) + Math.abs(it.y - v.posY) }
+                            .minByOrNull { Math.abs(it.x - refX) + Math.abs(it.y - refY) }
 
                         if (tree != null) {
-                            val hRes = ResourceLogisticsSystem.harvestTree(v, tree, currentResources, tiles, currentBuildings)
+                            val hRes = ResourceLogisticsSystem.harvestTree(v, tree, currentResources, currentTiles, currentBuildings)
                             v = hRes.updatedVillager
                             currentResources = hRes.updatedResources
                         } else {
-                            v = wanderAround(v, tiles, currentBuildings, currentResources, mapSize)
+                            v = wanderAround(v, currentTiles, currentBuildings, currentResources, mapSize)
                         }
                     }
 
                     JobType.MINER -> {
+                        val quarry = currentBuildings.find {
+                            it.id == v.assignedBuildingId &&
+                            it.type == BuildingType.STONE_QUARRY &&
+                            it.isConstructed &&
+                            !it.isDemolishing
+                        }
+
+                        val refX = quarry?.x ?: v.posX.toInt()
+                        val refY = quarry?.y ?: v.posY.toInt()
                         val rock = currentResources.filter { it.type == ResourceType.ROCK && it.amount > 0 }
-                            .minByOrNull { Math.abs(it.x - v.posX) + Math.abs(it.y - v.posY) }
+                            .minByOrNull { Math.abs(it.x - refX) + Math.abs(it.y - refY) }
 
                         if (rock != null) {
-                            val hRes = ResourceLogisticsSystem.harvestRock(v, rock, currentResources, tiles, currentBuildings)
+                            val hRes = ResourceLogisticsSystem.harvestRock(v, rock, currentResources, currentTiles, currentBuildings)
                             v = hRes.updatedVillager
                             currentResources = hRes.updatedResources
                         } else {
-                            v = wanderAround(v, tiles, currentBuildings, currentResources, mapSize)
+                            v = wanderAround(v, currentTiles, currentBuildings, currentResources, mapSize)
                         }
                     }
 
                     JobType.FORAGER -> {
+                        val hut = currentBuildings.find {
+                            it.id == v.assignedBuildingId &&
+                            it.type == BuildingType.FORAGER_HUT &&
+                            it.isConstructed &&
+                            !it.isDemolishing
+                        }
+
+                        val refX = hut?.x ?: v.posX.toInt()
+                        val refY = hut?.y ?: v.posY.toInt()
                         val bush = currentResources.filter { it.type == ResourceType.BERRY_BUSH && it.amount > 0 }
-                            .minByOrNull { Math.abs(it.x - v.posX) + Math.abs(it.y - v.posY) }
+                            .minByOrNull { Math.abs(it.x - refX) + Math.abs(it.y - refY) }
 
                         if (bush != null) {
-                            val hRes = ResourceLogisticsSystem.harvestBerries(v, bush, currentResources, tiles, currentBuildings)
+                            val hRes = ResourceLogisticsSystem.harvestBerries(v, bush, currentResources, currentTiles, currentBuildings)
                             v = hRes.updatedVillager
                             currentResources = hRes.updatedResources
                         } else {
-                            v = wanderAround(v, tiles, currentBuildings, currentResources, mapSize)
+                            v = wanderAround(v, currentTiles, currentBuildings, currentResources, mapSize)
                         }
                     }
 
                     JobType.BUILDER -> {
-                        val unbuilt = currentBuildings.find { !it.isConstructed }
-                        if (unbuilt != null) {
-                            val dist = Math.abs(v.posX - unbuilt.x) + Math.abs(v.posY - unbuilt.y)
+                        // Builders work on demolition targets first, then construction sites
+                        val demolitionTarget = currentBuildings.find { it.status == BuildingStatus.DEMOLISHING }
+                        val constructionTarget = currentBuildings.find { !it.isConstructed && it.status == BuildingStatus.UNDER_CONSTRUCTION }
+
+                        if (demolitionTarget != null) {
+                            val dist = Math.abs(v.posX - demolitionTarget.x) + Math.abs(v.posY - demolitionTarget.y)
+                            if (dist <= 1.8f) {
+                                val demoDelta = dt * 15f * v.productivityMultiplier
+                                val demoResult = ConstructionSystem.advanceDemolitionProgress(
+                                    demolitionTarget.id, demoDelta, currentBuildings, currentInv, currentTiles, mapSize
+                                )
+                                currentBuildings = demoResult.updatedBuildings
+                                currentInv = demoResult.updatedInventory
+                                currentTiles = demoResult.updatedTiles
+
+                                if (demoResult.isDestroyed) {
+                                    demolishedBuildingResult = demoResult.demolishedBuilding
+                                    woodSalvagedTotal += demoResult.woodSalvaged
+                                    stoneSalvagedTotal += demoResult.stoneSalvaged
+                                    v = v.copy(action = VillagerAction.IDLE, statusMessage = "Pembongkaran bangunan selesai")
+                                } else {
+                                    val prog = currentBuildings.find { it.id == demolitionTarget.id }?.demolitionProgress ?: 0f
+                                    v = v.copy(action = VillagerAction.DEMOLISHING, statusMessage = "Membongkar bangunan (${prog.toInt()}%)")
+                                }
+                            } else if (v.path.isEmpty()) {
+                                val path = GridPathfinder.findPath(
+                                    v.posX.toInt(), v.posY.toInt(),
+                                    demolitionTarget.x, demolitionTarget.y,
+                                    currentTiles, currentBuildings, currentResources
+                                )
+                                v = v.copy(action = VillagerAction.WALKING_TO, path = path, statusMessage = "Menuju tapak pembongkaran")
+                            }
+                        } else if (constructionTarget != null) {
+                            val dist = Math.abs(v.posX - constructionTarget.x) + Math.abs(v.posY - constructionTarget.y)
                             if (dist <= 1.8f) {
                                 val buildDelta = dt * 18f * v.productivityMultiplier
                                 val (newBld, completed) = ConstructionSystem.advanceBuildingProgress(
-                                    unbuilt.id, buildDelta, currentBuildings
+                                    constructionTarget.id, buildDelta, currentBuildings
                                 )
                                 currentBuildings = newBld
                                 if (completed) {
-                                    completedBuilding = unbuilt
+                                    completedBuilding = constructionTarget
                                     v = v.copy(action = VillagerAction.IDLE, statusMessage = "Bangunan berhasil diselesaikan!")
                                 } else {
-                                    val prog = newBld.find { it.id == unbuilt.id }?.constructionProgress ?: 0f
+                                    val prog = newBld.find { it.id == constructionTarget.id }?.constructionProgress ?: 0f
                                     v = v.copy(action = VillagerAction.BUILDING, statusMessage = "Mendirikan kerangka bangunan (${prog.toInt()}%)")
                                 }
                             } else if (v.path.isEmpty()) {
                                 val path = GridPathfinder.findPath(
                                     v.posX.toInt(), v.posY.toInt(),
-                                    unbuilt.x, unbuilt.y,
-                                    tiles, currentBuildings, currentResources
+                                    constructionTarget.x, constructionTarget.y,
+                                    currentTiles, currentBuildings, currentResources
                                 )
                                 v = v.copy(action = VillagerAction.WALKING_TO, path = path, statusMessage = "Menuju tapak konstruksi")
                             }
                         } else {
-                            v = wanderAround(v, tiles, currentBuildings, currentResources, mapSize)
+                            v = wanderAround(v, currentTiles, currentBuildings, currentResources, mapSize)
                         }
                     }
 
                     JobType.UNASSIGNED -> {
-                        v = wanderAround(v, tiles, currentBuildings, currentResources, mapSize)
+                        v = wanderAround(v, currentTiles, currentBuildings, currentResources, mapSize)
                     }
                 }
             } else {
                 // Free villager, baby, or child relaxing
-                v = wanderAround(v, tiles, currentBuildings, currentResources, mapSize)
+                v = wanderAround(v, currentTiles, currentBuildings, currentResources, mapSize)
             }
 
             // 7. Smooth Movement Along Path
@@ -277,10 +349,14 @@ object AiBehaviorSystem {
             updatedBuildings = currentBuildings,
             updatedResources = currentResources,
             updatedInventory = currentInv,
+            updatedTiles = currentTiles,
             foodHarvestedDelta = foodDelta,
             woodHarvestedDelta = woodDelta,
             stoneHarvestedDelta = stoneDelta,
-            newBuildingCompleted = completedBuilding
+            newBuildingCompleted = completedBuilding,
+            demolishedBuilding = demolishedBuildingResult,
+            woodSalvagedDelta = woodSalvagedTotal,
+            stoneSalvagedDelta = stoneSalvagedTotal
         )
     }
 

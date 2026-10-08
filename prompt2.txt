@@ -1,0 +1,1419 @@
+﻿PACKAGE 1
+Real Home Entry
+        ↓
+PACKAGE 2
+Real Workplace Assignment
+        ↓
+PACKAGE 3
+Dynamic Workforce Rebalancing
+        ↓
+PACKAGE 4
+Demolition / Recycling
+        ↓
+PACKAGE 5
+Worker → Workplace → Production → Logistics
+
+
+Alasannya penting: Package 5 bergantung pada Package 2, dan Package 3 juga bergantung pada workplace assignment yang benar.
+
+
+=== PACKAGE 1 — REAL HOME ENTRY & DAILY HOUSE ROUTINE ===
+
+
+AUDIT FIRST
+
+
+Inspect the existing:
+- HousingSystem
+- Villager model
+- Building model
+- BuildingType
+- AiBehaviorSystem
+- GridPathfinder
+- SimulationEngine
+- TimeSystem / DayPhase
+- Save/load models
+- Existing housing and house-entry tests
+
+
+Do not implement until you understand how the current housing simulation works.
+
+
+CURRENT PROBLEM:
+
+
+The repository already has:
+- homeBuildingId
+- isInHome
+- SLEEPING
+- housing capacity
+- family relationships
+- day/night phases
+
+
+However, entering the house is not yet a true physical simulation.
+
+
+The current logic can effectively treat a villager as inside the house once they are close enough.
+
+
+We need real entrance-based house behavior.
+
+
+GOAL:
+
+
+Every residential building must have a valid entrance position.
+
+
+A villager must physically navigate to the entrance before entering the house.
+
+
+Required state flow:
+
+
+DAY:
+SLEEPING
+→ LEAVING_HOME
+→ WALKING_TO_EXIT
+→ OUTSIDE
+→ DAILY_ROUTINE
+
+
+DUSK/NIGHT:
+DAILY_ROUTINE
+→ RETURNING_HOME
+→ WALKING_TO_HOME
+→ ENTERING_HOME
+→ INSIDE_HOME
+→ SLEEPING
+
+
+IMPORTANT:
+
+
+Do NOT teleport villagers into or out of houses.
+
+
+HOUSE ENTRANCE:
+
+
+Add a deterministic entrance position to residential buildings.
+
+
+The entrance must:
+- be outside the building footprint
+- be walkable
+- be pathfindable
+- remain consistent for the building
+- not overlap another building
+- work for different building sizes
+
+
+Pathfinding should target the entrance rather than the building's occupied footprint.
+
+
+ENTERING:
+
+
+When a villager reaches the entrance:
+1. transition to ENTERING_HOME
+2. perform a short deterministic entry transition
+3. set isInHome = true
+4. clear outside movement path
+5. transition to SLEEPING when appropriate
+
+
+Do not visually require a full interior map.
+
+
+The house interior can remain abstracted.
+
+
+The important requirement is that the simulation knows:
+- outside
+- at entrance
+- entering
+- inside
+- sleeping
+
+
+LEAVING:
+
+
+In the morning:
+1. SLEEPING
+2. LEAVING_HOME
+3. exit house through the same valid entrance
+4. isInHome = false
+5. place villager at the outside entrance tile
+6. resume normal daily routine
+
+
+HOUSE OCCUPANCY:
+
+
+Only villagers assigned to that house may enter it.
+
+
+Respect housing capacity.
+
+
+Do not allow:
+- homeless villagers entering occupied houses
+- villagers entering unconstructed houses
+- villagers entering demolished houses
+- villagers exceeding housing capacity
+
+
+FAMILY:
+
+
+Preserve current family behavior.
+
+
+Parents and children should normally share the same home when assigned.
+
+
+Partners should normally share the same home.
+
+
+If a house becomes unavailable:
+- clear invalid homeBuildingId
+- update residentIds
+- mark affected villagers homeless
+- allow HousingSystem to find another valid house
+
+
+DEMOLITION COMPATIBILITY:
+
+
+Prepare the housing system for future demolition.
+
+
+If a house enters DEMOLISHING:
+- it must no longer accept new residents
+- existing residents must leave
+- housing assignment must be invalidated safely
+- after demolition, affected residents become homeless or receive another valid house
+
+
+Do not implement the demolition system in this package unless necessary for compatibility.
+
+
+PERFORMANCE:
+
+
+Do not run expensive full-map searches every frame.
+
+
+Cache or calculate entrance positions deterministically.
+
+
+Avoid O(N²) behavior where possible.
+
+
+TESTS REQUIRED:
+
+
+Add automated tests for:
+
+
+1. Villager receives valid home.
+2. Villager does not enter unconstructed house.
+3. Villager walks toward house entrance.
+4. Villager enters house through entrance.
+5. isInHome becomes true only after entry.
+6. Villager reaches SLEEPING state inside house.
+7. Villager exits house in the morning.
+8. isInHome becomes false after leaving.
+9. Villager cannot enter a house over capacity.
+10. Homeless villager does not enter random house.
+11. Destroyed/invalid house clears housing assignment.
+12. Family members can share a house.
+13. Day/night transitions work at 1x, 2x and 3.5x speed.
+14. Save/load preserves home assignment and indoor state correctly.
+
+
+IMPORTANT ARCHITECTURE:
+
+
+Do not put all logic back into SimulationEngine.
+
+
+Keep housing behavior inside HousingSystem or appropriate modular systems.
+
+
+Update UI only after simulation behavior is correct.
+
+
+At the end:
+- run all existing tests
+- run new housing tests
+- report files changed
+- report tests passed/failed
+- explain any architectural changes
+
+
+=== PACKAGE 2 — REAL WORKPLACE ASSIGNMENT ===
+
+
+AUDIT FIRST
+
+
+Inspect:
+- JobSystem
+- Villager
+- Building
+- BuildingType
+- AiBehaviorSystem
+- FarmingSystem
+- ResourceLogisticsSystem
+- ConstructionSystem
+- existing job/workforce tests
+
+
+CURRENT PROBLEM:
+
+
+Workers currently have a job type, but workplace assignment is not sufficiently persistent.
+
+
+For example:
+- A villager may be FARMER.
+- AiBehaviorSystem can search for the first available farm.
+- Multiple farmers can therefore converge on the same farm.
+
+
+This is not acceptable.
+
+
+GOAL:
+
+
+Every worker must have:
+1. JobType
+2. Assigned workplace/building
+3. Valid workplace capacity
+
+
+Example:
+
+
+Farm #1:
+- Worker A
+- Worker B
+
+
+Farm #2:
+- Worker C
+- Worker D
+
+
+A farmer must work on their assigned field, not simply whichever field is found first.
+
+
+WORKPLACE MODEL:
+
+
+Use the existing model where possible.
+
+
+Prefer:
+Villager.assignedBuildingId
+
+
+and:
+
+
+Building.assignedWorkerIds
+
+
+Do not introduce duplicate assignment concepts unless necessary.
+
+
+Every workplace-capable building should define:
+
+
+- whether it is a workplace
+- worker capacity
+- compatible JobType
+
+
+Examples:
+
+
+WHEAT_FIELD → FARMER
+PUMPKIN_PATCH → FARMER
+WOODCUTTER_CAMP → WOODCUTTER
+STONE_QUARRY → MINER
+FORAGER_HUT → FORAGER
+
+
+Builders are special:
+- they should be assigned to active construction or demolition sites
+- they do not necessarily need a permanent workplace building
+
+
+WORKER CAPACITY:
+
+
+Do not hardcode:
+
+
+1 farm = 2 workers
+
+
+inside JobSystem logic.
+
+
+Move worker capacity into BuildingType/building configuration.
+
+
+Example concept:
+
+
+BuildingType.WHEAT_FIELD:
+workerSlots = 2
+compatibleJob = FARMER
+
+
+This makes the system extensible.
+
+
+ASSIGNMENT:
+
+
+When a worker is assigned:
+- set Villager.job
+- set Villager.assignedBuildingId
+- add villager ID to Building.assignedWorkerIds
+
+
+Keep both sides synchronized.
+
+
+When worker is removed:
+- clear assignedBuildingId
+- remove ID from building
+- return worker to UNASSIGNED pool if appropriate
+
+
+When building is destroyed or invalid:
+- release all workers
+- clear assignedBuildingId
+- return workers to available pool
+
+
+IMPORTANT:
+
+
+Never allow:
+- worker assigned to non-existent building
+- worker assigned to unconstructed workplace
+- worker assigned to incompatible job
+- more workers than building capacity
+- Building.assignedWorkerIds containing nonexistent villagers
+
+
+FARMING:
+
+
+A FARMER must:
+1. identify assigned farm
+2. pathfind to that farm
+3. work on that specific farm
+4. till/plant/care/harvest that farm
+5. carry harvested goods
+6. deliver resources according to existing logistics rules
+
+
+Do not use:
+currentBuildings.find { it is a farm }
+
+
+as the primary workplace selection.
+
+
+WOODCUTTER:
+
+
+Worker must have a specific woodcutter camp.
+
+
+MINER:
+
+
+Worker must have a specific quarry.
+
+
+FORAGER:
+
+
+Worker must have a specific forager hut.
+
+
+BUILDERS:
+
+
+Builder should select a specific active construction target.
+
+
+Prepare the architecture for demolition targets too.
+
+
+AUTO ASSIGN:
+
+
+Auto assignment should assign both:
+- JobType
+- workplace
+
+
+Example:
+
+
+unassigned villager
+→ FARMER
+→ Farm #2
+
+
+not merely:
+
+
+unassigned villager
+→ FARMER
+
+
+MANUAL ASSIGNMENT:
+
+
+If player increases farmer count:
+- find a valid farm with available worker slot
+- assign worker to that farm
+
+
+If player decreases farmer count:
+- release a specific worker
+- clear workplace assignment
+
+
+UI:
+
+
+Show meaningful information such as:
+
+
+FARMER
+2 / 2
+
+
+Farm #1
+2 / 2 workers
+
+
+Farm #2
+1 / 2 workers
+
+
+Do not make UI the source of truth.
+
+
+SIMULATION IS SOURCE OF TRUTH.
+
+
+TESTS REQUIRED:
+
+
+1. Farmer receives a specific farm.
+2. Two farms can have separate workers.
+3. Farmer does not randomly switch farms every tick.
+4. Worker follows assigned workplace.
+5. Worker cannot exceed workplace capacity.
+6. Removing worker clears workplace assignment.
+7. Destroying workplace releases workers.
+8. Auto assignment selects valid workplace.
+9. Worker cannot be assigned to incompatible workplace.
+10. Construction worker assignment works.
+11. Multiple workplaces work independently.
+12. Save/load preserves job + workplace assignment.
+13. Workforce changes affect actual simulation behavior.
+14. Existing job priority tests still pass.
+
+
+Run all tests after implementation.
+
+
+Do not implement unrelated content.
+
+
+=== PACKAGE 3 — DYNAMIC WORKFORCE REBALANCING ===
+
+
+AUDIT FIRST
+
+
+Inspect:
+- JobSystem
+- Building worker capacity
+- Villager assignments
+- JobPriority
+- AiBehaviorSystem
+- ResourceLogisticsSystem
+- existing workforce tests
+
+
+CURRENT PROBLEM:
+
+
+Current AUTO ASSIGN mainly handles:
+
+
+UNASSIGNED → JOB
+
+
+It does not sufficiently perform dynamic redistribution when the settlement's needs change.
+
+
+GOAL:
+
+
+AUTO ASSIGN must manage the whole workforce intelligently.
+
+
+It must consider:
+- job priority
+- available workplace capacity
+- resource shortages
+- food shortage
+- construction demand
+- demolition demand
+- worker availability
+- current worker assignment
+- whether worker is performing a critical task
+
+
+EXAMPLE:
+
+
+Farm A:
+2/2 workers
+
+
+Farm B:
+0/2 workers
+
+
+If Farm B becomes necessary and there are no unassigned workers, AUTO ASSIGN may safely move a suitable worker.
+
+
+However:
+
+
+DO NOT abruptly interrupt:
+- worker carrying resources
+- worker currently delivering important resources
+- worker very close to completing construction
+- worker currently harvesting
+- worker currently entering/exiting a house
+
+
+Use safe transition points.
+
+
+REBALANCING MODEL:
+
+
+Calculate:
+
+
+Current workforce
++
+Current capacity
++
+Current demand
++
+Player priority
+
+
+Then determine desired workforce.
+
+
+Example:
+
+
+Food shortage:
+FARMER = HIGH
+
+
+Wood shortage:
+WOODCUTTER = HIGH
+
+
+Construction queue:
+BUILDER = HIGH
+
+
+Then redistribute workers if necessary.
+
+
+IMPORTANT:
+
+
+Do not create oscillation.
+
+
+Bad behavior:
+
+
+FARMER
+→ WOODCUTTER
+→ FARMER
+→ WOODCUTTER
+
+
+every simulation tick.
+
+
+Use:
+- reassignment cooldown
+- minimum assignment duration
+- meaningful demand thresholds
+- safe transition states
+
+
+Only reassign when there is a real reason.
+
+
+MANUAL PRIORITY:
+
+
+Respect:
+
+
+HIGH
+MEDIUM
+LOW
+
+
+But priority should not blindly override survival needs.
+
+
+Food shortage should remain urgent.
+
+
+HOMELESSNESS:
+
+
+Do not reassign so many workers that critical housing/community systems become broken.
+
+
+UNASSIGNED POOL:
+
+
+Maintain an accurate available worker pool.
+
+
+UI should show:
+
+
+Assigned
+Unassigned
+Job capacity
+Vacancies
+Shortages
+
+
+WORKPLACE:
+
+
+Rebalancing must assign both:
+- JobType
+- workplace
+
+
+Example:
+
+
+worker A
+→ FARMER
+→ Farm #2
+
+
+not merely FARMER.
+
+
+TESTS REQUIRED:
+
+
+1. Unassigned workers are automatically assigned.
+2. Vacant workplace gets filled.
+3. Resource shortage increases relevant job demand.
+4. Priority affects assignment.
+5. Worker can safely transfer jobs.
+6. Worker carrying goods is not abruptly interrupted.
+7. Worker near completion is not unnecessarily interrupted.
+8. No assignment oscillation.
+9. No worker exceeds workplace capacity.
+10. Auto assignment can recover from a destroyed workplace.
+11. Manual mode prevents unwanted automatic reassignment.
+12. Save/load preserves assignments.
+13. Existing workforce tests continue passing.
+
+
+Do not redesign unrelated systems.
+
+
+=== PACKAGE 4 — BUILDING DEMOLITION / RECYCLING ===
+
+
+AUDIT FIRST
+
+
+Inspect:
+- ConstructionSystem
+- Building model
+- BuildingType
+- Villager
+- JobSystem
+- AiBehaviorSystem
+- ResourceLogisticsSystem
+- HousingSystem
+- WorldTile
+- Save/load
+- existing construction tests
+
+
+CURRENT PROBLEM:
+
+
+Buildings can currently be placed and constructed.
+
+
+There is no proper building demolition/recycling simulation.
+
+
+GOAL:
+
+
+Allow the player to recycle/demolish an already constructed building.
+
+
+Demolition must be a REAL JOB performed by builders.
+
+
+Do NOT instantly delete the building.
+
+
+FLOW:
+
+
+PLAYER:
+Select completed building
+→ Recycle/Demolish
+→ confirmation
+→ building becomes DEMOLISHING
+
+
+BUILDER:
+Find demolition target
+→ reserve target
+→ walk to target
+→ perform demolition work
+→ progress increases
+→ building destroyed
+→ salvage resources generated
+
+
+BUILDING STATE:
+
+
+Add a proper state if the current model does not already support it.
+
+
+Possible states:
+
+
+BLUEPRINT
+UNDER_CONSTRUCTION
+COMPLETED
+DEMOLISHING
+
+
+Do not use scattered booleans if an enum/state model is cleaner.
+
+
+DEMOLITION RULES:
+
+
+Only completed buildings can normally be demolished.
+
+
+Do not allow:
+- already demolished building
+- same building queued twice
+- invalid building ID
+- demolition of protected/core settlement building unless explicitly allowed
+
+
+BUILDER:
+
+
+Demolition requires at least one builder.
+
+
+Builders should be assigned to a specific demolition target.
+
+
+Do not teleport builders.
+
+
+They must pathfind to the target/entrance/work point.
+
+
+PROGRESS:
+
+
+Demolition should take simulation time.
+
+
+Example:
+
+
+0%
+→ 25%
+→ 50%
+→ 75%
+→ 100%
+
+
+Speed should depend on:
+- number of builders
+- builder productivity
+- simulation speed
+
+
+Do not make speed changes merely visual.
+
+
+SALVAGE:
+
+
+Demolition returns materials, but ALWAYS less than original construction cost.
+
+
+Example:
+
+
+Original:
+Wood = 20
+Stone = 10
+
+
+Salvage:
+Wood = 10–15
+Stone = 4–7
+
+
+Use deterministic rules, not random values unless there is a clear reason.
+
+
+Prefer a fixed salvage ratio/configuration per BuildingType.
+
+
+Example concept:
+
+
+salvageWoodRatio = 0.60
+salvageStoneRatio = 0.50
+
+
+Then:
+
+
+salvage = floor(originalCost × ratio)
+
+
+Ensure:
+
+
+salvage < original cost
+
+
+for positive construction costs.
+
+
+Do not refund the full cost.
+
+
+RESOURCE HANDLING:
+
+
+Salvaged materials must enter the REAL inventory/logistics system.
+
+
+Do not simply increase a UI number.
+
+
+Workers may need to carry the salvage depending on the existing logistics architecture.
+
+
+At minimum:
+- simulation inventory changes correctly
+- event/log records the salvage
+- no duplication is possible
+
+
+FOOTPRINT:
+
+
+After demolition:
+- building removed
+- occupied tiles become available
+- pathfinding updates
+- construction placement can use the footprint again
+- invalidated assignments are cleaned up
+
+
+NATURAL RESOURCES:
+
+
+Do not automatically recreate trees/rocks unless NatureSystem already supports such behavior.
+
+
+The demolition system should simply restore the terrain to a valid unoccupied state.
+
+
+HOUSING:
+
+
+If residential building is demolished:
+- stop accepting residents immediately
+- residents must leave
+- housing assignment is cleared or reassigned
+- residentIds are synchronized
+- affected villagers become homeless temporarily if no alternative exists
+
+
+WORKPLACE:
+
+
+If workplace is demolished:
+- assigned workers are released
+- assignedBuildingId is cleared
+- workers return to available workforce
+- AUTO ASSIGN may later reassign them
+
+
+UI:
+
+
+Add:
+- Select building
+- Recycle/Demolish action
+- confirmation
+- demolition progress
+- builder count
+- estimated salvage if practical
+
+
+UI must reflect real simulation state.
+
+
+SAVE/LOAD:
+
+
+Save:
+- demolition state
+- demolition progress
+- assigned builders
+- target building
+- resulting resource state
+
+
+Loading must not duplicate salvage.
+
+
+TESTS REQUIRED:
+
+
+1. Completed building can be marked for demolition.
+2. Building is not instantly deleted.
+3. Builder is assigned.
+4. Builder physically travels to target.
+5. Demolition progresses.
+6. Multiple builders accelerate demolition correctly.
+7. Building is removed only at completion.
+8. Footprint becomes available.
+9. Salvage is less than construction cost.
+10. Salvage enters real inventory.
+11. No duplicate salvage.
+12. Workers are released.
+13. Residents are safely handled.
+14. Housing capacity updates.
+15. Pathfinding updates.
+16. Save/load during demolition works.
+17. Existing construction tests remain passing.
+
+
+Do not implement unrelated features.
+
+
+=== PACKAGE 5 — BUILDING ↔ WORKER ↔ PRODUCTION PIPELINE ===
+
+
+AUDIT FIRST
+
+
+Inspect the complete simulation chain:
+
+
+Villager
+→ JobSystem
+→ Workplace
+→ AiBehaviorSystem
+→ FarmingSystem / Resource systems
+→ ResourceLogisticsSystem
+→ VillageInventory
+→ NeedsSystem
+→ PopulationSystem
+
+
+Also inspect:
+- ConstructionSystem
+- HousingSystem
+- Building model
+- BuildingType
+- existing tests
+
+
+GOAL:
+
+
+Every important workplace must produce a real simulation effect.
+
+
+The game must NOT rely on fake counters such as:
+
+
+farmerCount += 1
+food += 1
+
+
+without the worker actually performing the corresponding job.
+
+
+CORE PIPELINE:
+
+
+WORKER
+↓
+ASSIGNED WORKPLACE
+↓
+TRAVEL
+↓
+WORK ACTION
+↓
+RESOURCE PRODUCED
+↓
+CARRY RESOURCE
+↓
+DELIVER RESOURCE
+↓
+STORAGE
+↓
+CONSUMPTION / NEXT PRODUCTION STEP
+
+
+FARMING:
+
+
+Required:
+
+
+Farmer assigned to Farm A
+→ travels to Farm A
+→ prepares field
+→ plants/maintains crop
+→ waits for crop growth
+→ harvests
+→ obtains food/resource
+→ carries harvest
+→ delivers to valid storage
+→ inventory increases
+→ villager becomes available for next task
+
+
+Do not let one farmer harvest every farm.
+
+
+Each field must have its own assigned workforce.
+
+
+WOODCUTTING:
+
+
+Woodcutter:
+→ assigned camp
+→ travels to camp/work area
+→ finds valid tree/resource
+→ harvests
+→ carries wood
+→ delivers wood
+→ tree resource updates
+
+
+MINING:
+
+
+Miner:
+→ assigned quarry
+→ travels
+→ performs mining
+→ obtains stone
+→ carries stone
+→ delivers stone
+
+
+FORAGING:
+
+
+Forager:
+→ assigned hut
+→ searches valid food source
+→ gathers
+→ carries
+→ delivers
+
+
+BUILDERS:
+
+
+Builder:
+→ assigned construction target
+→ obtains required construction resources through existing logistics
+→ performs construction
+→ progress increases
+→ completion updates building state
+
+
+DEMOLITION:
+
+
+Builder:
+→ assigned demolition target
+→ travels
+→ performs demolition
+→ salvage produced
+→ resource enters logistics/inventory
+
+
+WORKPLACE CAPACITY:
+
+
+Each workplace must expose:
+- worker slots
+- assigned workers
+- compatible job
+
+
+The system must derive workforce capacity from the actual buildings.
+
+
+DO NOT:
+
+
+Do not put building-specific business logic into SimulationEngine.
+
+
+Use modular systems.
+
+
+RESOURCE LOGISTICS:
+
+
+Make sure workers do not magically teleport resources.
+
+
+Existing logistics behavior should be preserved and strengthened.
+
+
+A worker carrying food/wood/stone should have:
+- carryingType
+- carryingAmount
+- target
+- path
+- delivery action
+
+
+After delivery:
+- carryingAmount becomes zero
+- carryingType resets
+- resource is actually credited
+
+
+FOOD:
+
+
+Food produced by farms must eventually be available to villagers through storage/consumption.
+
+
+Villager hunger must therefore be connected to actual food production.
+
+
+Do not allow infinite food.
+
+
+STARVATION:
+
+
+If farms stop working:
+→ food production falls
+→ storage eventually declines
+→ villagers consume remaining food
+→ hunger increases
+→ survival consequences occur according to existing Needs/Population systems.
+
+
+This should emerge naturally from the simulation.
+
+
+BUILDING FAILURE / WORKER SHORTAGE:
+
+
+If a building has:
+0/2 workers
+
+
+it should produce less or not produce depending on its type/rules.
+
+
+Do not let production remain identical regardless of worker count.
+
+
+Example:
+
+
+2 farmers → full work rate
+1 farmer → reduced work rate
+0 farmers → no active farming work
+
+
+Use deterministic and understandable rules.
+
+
+PLAYER WORKFORCE CHANGES:
+
+
+When player changes worker counts:
+- production must change
+- resource flow must change
+- worker behavior must change
+
+
+The UI must never be merely decorative.
+
+
+TESTS REQUIRED:
+
+
+1. Farmer produces from assigned farm.
+2. Different farms operate independently.
+3. Worker carries harvested resources.
+4. Resource reaches storage.
+5. Inventory changes correctly.
+6. Food consumption uses actual inventory.
+7. Woodcutter produces wood.
+8. Miner produces stone.
+9. Forager produces food.
+10. Zero workers means no worker-driven production.
+11. Reduced workforce reduces production appropriately.
+12. Builder advances actual construction.
+13. Demolition produces salvage.
+14. No resource duplication.
+15. No worker can produce from an unassigned workplace.
+16. Save/load preserves active work state.
+17. Simulation speed affects production timing correctly.
+18. Existing tests remain passing.
+
+
+PERFORMANCE:
+
+
+Do not run expensive global searches every tick.
+
+
+Use:
+- cached assignments
+- deterministic target selection
+- reasonable update intervals
+- existing pathfinding infrastructure
+
+
+Avoid O(villagers × buildings × resources) every frame where possible.
+
+
+ARCHITECTURE:
+
+
+Keep these concerns separated:
+
+
+JobSystem
+→ who works where
+
+
+AiBehaviorSystem
+→ what the villager does
+
+
+FarmingSystem
+→ farming mechanics
+
+
+ResourceLogisticsSystem
+→ movement of resources
+
+
+ConstructionSystem
+→ construction/demolition
+
+
+HousingSystem
+→ residence
+
+
+NeedsSystem
+→ villager needs
+
+
+SimulationEngine
+→ orchestration only
+
+
+Do not turn SimulationEngine into a giant class again.
+
+
+FINAL VALIDATION:
+
+
+After implementation:
+1. Run all tests.
+2. Run new tests.
+3. Check for regressions.
+4. Verify 1x, 2x, 3.5x.
+5. Verify day/night.
+6. Verify save/load.
+7. Verify workforce UI reflects actual simulation.
+8. Verify no fake resource generation.
+9. Verify no teleporting workers/resources.
+10. Verify no unsafe casts.
+
+
+Report:
+- files changed
+- architecture changes
+- tests added
+- tests passed
+- tests failed
+- remaining limitations

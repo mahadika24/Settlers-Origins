@@ -7,13 +7,16 @@ import com.example.game.model.WeatherType
 /**
  * Modular Farming System
  * Manages farm preparation, planting, crop growth cycles (Wheat & Pumpkin),
- * weather & well acceleration, and harvesting.
+ * workforce productivity scaling, weather & well acceleration, and harvesting.
  */
 object FarmingSystem {
 
     /**
      * Advances crop growth for all tilled fields in the village.
-     * Guaranteed pure functional transformation: NO UNSAFE CASTS!
+     * Growth rate scales with assigned workforce:
+     * - 0 workers: 0x (no active maintenance, unless rain provides mild natural moisture)
+     * - 1 worker: 0.6x (reduced work rate)
+     * - 2+ workers: 1.0x (full work rate)
      */
     fun updateCropGrowth(
         buildings: List<Building>,
@@ -23,18 +26,29 @@ object FarmingSystem {
         val wells = buildings.filter { it.type == BuildingType.WELL && it.isConstructed }
 
         return buildings.map { building ->
-            if (!building.isConstructed) {
+            if (!building.isConstructed || building.isDemolishing) {
                 building
             } else if (building.type == BuildingType.WHEAT_FIELD || building.type == BuildingType.PUMPKIN_PATCH) {
                 if (building.isTilled && building.cropGrowth < 100f) {
-                    val hasWellBonus = wells.any { w ->
-                        val dist = Math.abs(w.x - building.x) + Math.abs(w.y - building.y)
-                        dist <= 4
+                    val workerMultiplier = when {
+                        building.assignedWorkerIds.size >= 2 -> 1.0f
+                        building.assignedWorkerIds.size == 1 -> 0.6f
+                        weather == WeatherType.RAIN -> 0.25f // Mild natural moisture during rain
+                        else -> 0.0f // Zero workers -> no worker-driven growth
                     }
-                    val baseGrowthRate = if (hasWellBonus) 4.5f else 3.0f
-                    val effectiveGrowthRate = baseGrowthRate * weather.cropGrowthModifier
-                    val newGrowth = (building.cropGrowth + dt * effectiveGrowthRate).coerceAtMost(100f)
-                    building.copy(cropGrowth = newGrowth)
+
+                    if (workerMultiplier > 0f) {
+                        val hasWellBonus = wells.any { w ->
+                            val dist = Math.abs(w.x - building.x) + Math.abs(w.y - building.y)
+                            dist <= 4
+                        }
+                        val baseGrowthRate = if (hasWellBonus) 4.5f else 3.0f
+                        val effectiveGrowthRate = baseGrowthRate * weather.cropGrowthModifier * workerMultiplier
+                        val newGrowth = (building.cropGrowth + dt * effectiveGrowthRate).coerceAtMost(100f)
+                        building.copy(cropGrowth = newGrowth)
+                    } else {
+                        building
+                    }
                 } else {
                     building
                 }

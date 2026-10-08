@@ -245,15 +245,16 @@ class SimulationEngineTest {
             ageDays = 25f,
             homeBuildingId = hut.id,
             isInHome = false,
-            posX = 6.2f,
-            posY = 9.2f
+            posX = 7.0f,
+            posY = 11.0f
         )
 
         val tiles = Array(22) { x -> Array(22) { y -> WorldTile(x, y, TileType.GRASS) } }
         val nightTime = TimeSystem(dayTimeSeconds = 90f) // Night
 
         // Resident near home at night enters the home
-        val (housedNight, _) = HousingSystem.updateHousingRoutines(
+        // 1. Reaching entrance -> transitions to ENTERING_HOME
+        val (housedEntering, _) = HousingSystem.updateHousingRoutines(
             villagers = listOf(resident),
             buildings = listOf(hut),
             timeSystem = nightTime,
@@ -261,14 +262,27 @@ class SimulationEngineTest {
             resources = emptyList(),
             dt = 1f
         )
+        val enteringVillager = housedEntering.first()
+        assertEquals(VillagerAction.ENTERING_HOME, enteringVillager.action)
+        assertFalse("Not fully inside until entry transition finishes", enteringVillager.isInHome)
 
+        // 2. Completes entry -> inside home and SLEEPING
+        val (housedNight, _) = HousingSystem.updateHousingRoutines(
+            villagers = listOf(enteringVillager),
+            buildings = listOf(hut),
+            timeSystem = nightTime,
+            tiles = tiles,
+            resources = emptyList(),
+            dt = 1f
+        )
         val sleeping = housedNight.first()
         assertTrue("Must be inside home at night", sleeping.isInHome)
         assertEquals(VillagerAction.SLEEPING, sleeping.action)
 
         // Morning comes: resident wakes up and steps outside
         val morningTime = TimeSystem(dayTimeSeconds = 25f) // Day
-        val (housedMorning, _) = HousingSystem.updateHousingRoutines(
+        // 1. First tick -> transitions to LEAVING_HOME
+        val (housedLeaving, _) = HousingSystem.updateHousingRoutines(
             villagers = listOf(sleeping),
             buildings = listOf(hut),
             timeSystem = morningTime,
@@ -276,7 +290,19 @@ class SimulationEngineTest {
             resources = emptyList(),
             dt = 1f
         )
+        val leavingVillager = housedLeaving.first()
+        assertEquals(VillagerAction.LEAVING_HOME, leavingVillager.action)
+        assertTrue(leavingVillager.isInHome)
 
+        // 2. Second tick -> physically outside at entrance tile
+        val (housedMorning, _) = HousingSystem.updateHousingRoutines(
+            villagers = listOf(leavingVillager),
+            buildings = listOf(hut),
+            timeSystem = morningTime,
+            tiles = tiles,
+            resources = emptyList(),
+            dt = 1f
+        )
         val awake = housedMorning.first()
         assertFalse("Must step outside when day arrives", awake.isInHome)
         assertEquals(VillagerAction.IDLE, awake.action)
@@ -325,7 +351,8 @@ class SimulationEngineTest {
             y = 9,
             isConstructed = true,
             isTilled = false,
-            cropGrowth = 0f
+            cropGrowth = 0f,
+            assignedWorkerIds = listOf("farmer1", "farmer2")
         )
 
         // 1. Till Field

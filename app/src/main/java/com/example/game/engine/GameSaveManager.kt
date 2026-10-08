@@ -85,6 +85,8 @@ object GameSaveManager {
                     put("x", b.x)
                     put("y", b.y)
                     put("isConstructed", b.isConstructed)
+                    put("status", b.status.name)
+                    put("demolitionProgress", b.demolitionProgress.toDouble())
                     put("constructionProgress", b.constructionProgress.toDouble())
                     put("deliveredWood", b.deliveredWood)
                     put("deliveredStone", b.deliveredStone)

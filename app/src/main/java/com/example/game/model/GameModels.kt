@@ -169,7 +169,15 @@ enum class BuildingType(
         maxWorkers = 0,
         housingCapacity = 0,
         iconEmoji = "💧"
-    )
+    );
+
+    val isWorkplace: Boolean get() = maxWorkers > 0 && defaultJob != JobType.UNASSIGNED
+}
+
+enum class BuildingStatus {
+    UNDER_CONSTRUCTION,
+    COMPLETED,
+    DEMOLISHING
 }
 
 data class Building(
@@ -179,6 +187,8 @@ data class Building(
     val y: Int,
     val isConstructed: Boolean = true,
     val constructionProgress: Float = 100f, // 0..100
+    val status: BuildingStatus = if (isConstructed) BuildingStatus.COMPLETED else BuildingStatus.UNDER_CONSTRUCTION,
+    val demolitionProgress: Float = 0f, // 0..100%
     val deliveredWood: Int = 0,
     val deliveredStone: Int = 0,
     val assignedWorkerIds: List<String> = emptyList(),
@@ -192,8 +202,39 @@ data class Building(
     val isFullyStockedForBuild: Boolean
         get() = deliveredWood >= type.woodCost && deliveredStone >= type.stoneCost
 
+    val isDemolishing: Boolean get() = status == BuildingStatus.DEMOLISHING
+
+    // Salvage returns deterministic materials strictly less than original construction cost
+    val salvageWood: Int get() = if (type.woodCost > 0) ((type.woodCost * 0.60f).toInt()).coerceIn(1, type.woodCost - 1) else 0
+    val salvageStone: Int get() = if (type.stoneCost > 0) ((type.stoneCost * 0.50f).toInt()).coerceIn(1, type.stoneCost - 1) else 0
+
     fun insideResidentsCount(villagers: List<Villager>): Int =
         villagers.count { it.homeBuildingId == id && it.isInHome }
+
+    /**
+     * Deterministic exterior entrance tile outside the footprint of the building.
+     */
+    fun getEntranceTile(mapSize: Int = 22, tiles: Array<Array<WorldTile>>? = null): Pair<Int, Int> {
+        val frontX = (x + type.width / 2).coerceIn(0, mapSize - 1)
+        val frontY = (y + type.height).coerceIn(0, mapSize - 1)
+        if (tiles == null || (frontY < mapSize && tiles[frontX][frontY].type.isWalkable)) {
+            return Pair(frontX, frontY)
+        }
+        val northY = y - 1
+        if (northY >= 0 && tiles[frontX][northY].type.isWalkable) {
+            return Pair(frontX, northY)
+        }
+        val eastX = x + type.width
+        val midY = (y + type.height / 2).coerceIn(0, mapSize - 1)
+        if (eastX < mapSize && tiles[eastX][midY].type.isWalkable) {
+            return Pair(eastX, midY)
+        }
+        val westX = x - 1
+        if (westX >= 0 && tiles[westX][midY].type.isWalkable) {
+            return Pair(westX, midY)
+        }
+        return Pair(frontX, frontY)
+    }
 }
 
 enum class ResourceType(val label: String, val iconEmoji: String) {
@@ -239,8 +280,11 @@ enum class VillagerAction(val label: String, val emoji: String) {
     MINING("Menambang Batu", "⛏️"),
     FORAGING("Memetik Beri", "🫐"),
     BUILDING("Membangun", "🔨"),
+    DEMOLISHING("Membongkar", "⛏️"),
     DELIVERING("Membawa Bahan", "📦"),
     EATING("Menyantap Makanan", "🍞"),
+    ENTERING_HOME("Masuk Rumah", "🚪"),
+    LEAVING_HOME("Keluar Rumah", "🌅"),
     SLEEPING("Tidur & Beristirahat", "💤"),
     PROCREATING("Bercengkerama di Rumah", "❤️"),
     RECREATING("Menikmati Taman", "🌸"),

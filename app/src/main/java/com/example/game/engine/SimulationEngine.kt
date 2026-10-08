@@ -11,6 +11,7 @@ import com.example.game.engine.systems.NeedsSystem
 import com.example.game.engine.systems.PopulationSystem
 import com.example.game.engine.systems.SimulationClockSystem
 import com.example.game.model.Building
+import com.example.game.model.BuildingStatus
 import com.example.game.model.BuildingType
 import com.example.game.model.CarryType
 import com.example.game.model.CommunityGoal
@@ -166,33 +167,76 @@ class SimulationEngine(private val context: Context? = null) {
 
     fun assignJob(villagerId: String, newJob: JobType) {
         val state = _gameState.value
+        val targetVillager = state.villagers.find { it.id == villagerId } ?: return
+        if (!targetVillager.canWork) return
+
+        val oldBuildingId = targetVillager.assignedBuildingId
+        val updatedBuildings = state.buildings.toMutableList()
+
+        // Clear from old workplace
+        if (oldBuildingId != null) {
+            val oldIdx = updatedBuildings.indexOfFirst { it.id == oldBuildingId }
+            if (oldIdx != -1) {
+                val oldB = updatedBuildings[oldIdx]
+                updatedBuildings[oldIdx] = oldB.copy(
+                    assignedWorkerIds = oldB.assignedWorkerIds.filter { it != villagerId }
+                )
+            }
+        }
+
+        var newAssignedBuildingId: String? = null
+        if (newJob != JobType.UNASSIGNED) {
+            val workplace = updatedBuildings.find {
+                it.isConstructed &&
+                it.status == BuildingStatus.COMPLETED &&
+                it.type.defaultJob == newJob &&
+                it.assignedWorkerIds.size < it.type.maxWorkers
+            }
+            if (workplace != null) {
+                newAssignedBuildingId = workplace.id
+                val newIdx = updatedBuildings.indexOfFirst { it.id == workplace.id }
+                if (newIdx != -1) {
+                    updatedBuildings[newIdx] = workplace.copy(
+                        assignedWorkerIds = workplace.assignedWorkerIds + villagerId
+                    )
+                }
+            }
+        }
+
+        val action = if (targetVillager.carryingAmount > 0) targetVillager.action else VillagerAction.IDLE
+        val path = if (targetVillager.carryingAmount > 0) targetVillager.path else emptyList()
+
         val updatedVillagers = state.villagers.map { v ->
-            if (v.id == villagerId && v.canWork) {
-                // Safe transition: preserve carrying goods if any
-                val action = if (v.carryingAmount > 0) v.action else VillagerAction.IDLE
-                val path = if (v.carryingAmount > 0) v.path else emptyList()
+            if (v.id == villagerId) {
                 v.copy(
                     job = newJob,
+                    assignedBuildingId = newAssignedBuildingId,
                     action = action,
                     path = path,
                     statusMessage = "Ditugaskan sebagai ${newJob.title}"
                 )
             } else v
         }
-        _gameState.value = state.copy(villagers = updatedVillagers)
-        val targetName = updatedVillagers.find { it.id == villagerId }?.name ?: "Warga"
-        addEvent("Tugas Baru", "$targetName sekarang bekerja sebagai ${newJob.title}", newJob.iconEmoji)
+
+        _gameState.value = state.copy(
+            villagers = updatedVillagers,
+            buildings = updatedBuildings
+        )
+        addEvent("Tugas Baru", "${targetVillager.name} sekarang bekerja sebagai ${newJob.title}", newJob.iconEmoji)
     }
 
     fun rebalanceJobs(job: JobType, targetCount: Int) {
         val state = _gameState.value
-        val updatedVillagers = JobSystem.rebalanceJobCount(
+        val result = JobSystem.rebalanceJobCount(
             job = job,
             targetCount = targetCount,
             villagers = state.villagers,
             buildings = state.buildings
         )
-        _gameState.value = state.copy(villagers = updatedVillagers)
+        _gameState.value = state.copy(
+            villagers = result.updatedVillagers,
+            buildings = result.updatedBuildings
+        )
     }
 
     fun canPlaceBuilding(type: BuildingType, startX: Int, startY: Int): Boolean {
@@ -230,6 +274,20 @@ class SimulationEngine(private val context: Context? = null) {
         )
 
         addEvent("Konstruksi Dimulai", "Tapak ${type.title} disiapkan. Tukang bangun akan segera mengerjakannya.", "🔨")
+        return true
+    }
+
+    fun demolishBuilding(buildingId: String): Boolean {
+        val state = _gameState.value
+        val target = state.buildings.find { it.id == buildingId } ?: return false
+        val pair = ConstructionSystem.markForDemolition(buildingId, state.buildings, state.villagers) ?: return false
+
+        _gameState.value = state.copy(
+            buildings = pair.first,
+            villagers = pair.second,
+            selectedBuildingId = null
+        )
+        addEvent("Pembongkaran Dimulai", "Tapak ${target.type.title} mulai dibongkar oleh tukang bangun untuk mendaur ulang bahan ⛏️", "⛏️")
         return true
     }
 
@@ -323,21 +381,24 @@ class SimulationEngine(private val context: Context? = null) {
         }
 
         var activeVillagers = popResult.updatedVillagers
+        var activeBuildings = housedBuildings
 
         // 8. Auto-Assign Workforce balancing if enabled
         if (state.isAutoAssignEnabled) {
-            activeVillagers = JobSystem.performAutoAssignment(
+            val autoRes = JobSystem.performAutoAssignment(
                 villagers = activeVillagers,
-                buildings = housedBuildings,
+                buildings = activeBuildings,
                 inventory = state.inventory,
                 jobPriorities = state.jobPriorities
             )
+            activeVillagers = autoRes.updatedVillagers
+            activeBuildings = autoRes.updatedBuildings
         }
 
-        // 9. AI Behavior System (Decisions, work routines, resource deliveries, movement)
+        // 9. AI Behavior System (Decisions, work routines, resource deliveries, movement, construction/demolition)
         val aiResult = AiBehaviorSystem.tickAi(
             villagers = activeVillagers,
-            buildings = housedBuildings,
+            buildings = activeBuildings,
             resources = updatedResources,
             tiles = state.tiles,
             inventory = state.inventory,
@@ -348,6 +409,15 @@ class SimulationEngine(private val context: Context? = null) {
 
         if (aiResult.newBuildingCompleted != null) {
             addEvent("Bangunan Selesai!", "${aiResult.newBuildingCompleted.type.title} telah selesai didirikan dan siap digunakan!", "🎉")
+        }
+
+        if (aiResult.demolishedBuilding != null) {
+            val b = aiResult.demolishedBuilding
+            addEvent(
+                "Pembongkaran Selesai!",
+                "${b.type.title} telah selesai dibongkar. Didaur ulang: +${aiResult.woodSalvagedDelta} kayu, +${aiResult.stoneSalvagedDelta} batu.",
+                "♻️"
+            )
         }
 
         // 10. Goals & Milestones Update
@@ -368,7 +438,7 @@ class SimulationEngine(private val context: Context? = null) {
                 )
                 "goal_huts" -> {
                     val hutCount = aiResult.updatedBuildings.count {
-                        (it.type == BuildingType.COZY_HUT || it.type == BuildingType.FAMILY_HOMESTEAD) && it.isConstructed
+                        (it.type == BuildingType.COZY_HUT || it.type == BuildingType.FAMILY_HOMESTEAD) && it.isConstructed && !it.isDemolishing
                     }
                     goal.copy(
                         current = hutCount.coerceAtMost(goal.target),
@@ -380,7 +450,7 @@ class SimulationEngine(private val context: Context? = null) {
                     isCompleted = aiResult.updatedVillagers.size >= goal.target
                 )
                 "goal_granary" -> {
-                    val granaryBuilt = aiResult.updatedBuildings.any { it.type == BuildingType.GRANARY && it.isConstructed }
+                    val granaryBuilt = aiResult.updatedBuildings.any { it.type == BuildingType.GRANARY && it.isConstructed && !it.isDemolishing }
                     goal.copy(
                         current = if (granaryBuilt) 1 else 0,
                         isCompleted = granaryBuilt
@@ -409,6 +479,7 @@ class SimulationEngine(private val context: Context? = null) {
 
         // 12. Commit Single Source of Truth
         _gameState.value = state.copy(
+            tiles = aiResult.updatedTiles,
             timeSystem = updatedTimeSystem,
             weather = weatherResult.updatedWeather,
             weatherTimer = weatherResult.updatedTimer,
@@ -451,19 +522,31 @@ class SimulationEngine(private val context: Context? = null) {
             }
         }
 
+        val silasId = UUID.randomUUID().toString()
+        val marthaId = UUID.randomUUID().toString()
+        val tobyId = UUID.randomUUID().toString()
+        val bramId = UUID.randomUUID().toString()
+        val kaelId = UUID.randomUUID().toString()
+        val alaraId = UUID.randomUUID().toString()
+        val jarekId = UUID.randomUUID().toString()
+
         val townHearth = Building(
             type = BuildingType.TOWN_HEARTH,
             x = 9,
             y = 9,
             isConstructed = true,
-            constructionProgress = 100f
+            constructionProgress = 100f,
+            status = BuildingStatus.COMPLETED,
+            residentIds = listOf(kaelId, alaraId, jarekId)
         )
         val starterHut = Building(
             type = BuildingType.COZY_HUT,
             x = 6,
             y = 9,
             isConstructed = true,
-            constructionProgress = 100f
+            constructionProgress = 100f,
+            status = BuildingStatus.COMPLETED,
+            residentIds = listOf(silasId, marthaId, tobyId, bramId)
         )
         val starterFarm = Building(
             type = BuildingType.WHEAT_FIELD,
@@ -471,22 +554,28 @@ class SimulationEngine(private val context: Context? = null) {
             y = 9,
             isConstructed = true,
             constructionProgress = 100f,
+            status = BuildingStatus.COMPLETED,
             isTilled = true,
-            cropGrowth = 40f
+            cropGrowth = 40f,
+            assignedWorkerIds = listOf(silasId, marthaId)
         )
         val woodcutterCamp = Building(
             type = BuildingType.WOODCUTTER_CAMP,
             x = 6,
             y = 12,
             isConstructed = true,
-            constructionProgress = 100f
+            constructionProgress = 100f,
+            status = BuildingStatus.COMPLETED,
+            assignedWorkerIds = listOf(bramId)
         )
         val stoneQuarry = Building(
             type = BuildingType.STONE_QUARRY,
             x = 12,
             y = 12,
             isConstructed = true,
-            constructionProgress = 100f
+            constructionProgress = 100f,
+            status = BuildingStatus.COMPLETED,
+            assignedWorkerIds = listOf(kaelId)
         )
 
         val buildings = listOf(townHearth, starterHut, starterFarm, woodcutterCamp, stoneQuarry)
@@ -562,10 +651,6 @@ class SimulationEngine(private val context: Context? = null) {
             }
         }
 
-        val silasId = UUID.randomUUID().toString()
-        val marthaId = UUID.randomUUID().toString()
-        val tobyId = UUID.randomUUID().toString()
-
         val initialVillagers = listOf(
             Villager(
                 id = silasId,
@@ -574,6 +659,7 @@ class SimulationEngine(private val context: Context? = null) {
                 ageDays = 26f,
                 job = JobType.FARMER,
                 homeBuildingId = starterHut.id,
+                assignedBuildingId = starterFarm.id,
                 partnerId = marthaId,
                 childrenIds = listOf(tobyId),
                 posX = 12.5f,
@@ -588,6 +674,7 @@ class SimulationEngine(private val context: Context? = null) {
                 ageDays = 24f,
                 job = JobType.FARMER,
                 homeBuildingId = starterHut.id,
+                assignedBuildingId = starterFarm.id,
                 partnerId = silasId,
                 childrenIds = listOf(tobyId),
                 posX = 13.5f,
@@ -596,44 +683,52 @@ class SimulationEngine(private val context: Context? = null) {
                 statusMessage = "Mengolah petak tanah"
             ),
             Villager(
+                id = bramId,
                 name = "Bram",
                 isFemale = false,
                 ageDays = 58f,
                 job = JobType.WOODCUTTER,
                 homeBuildingId = starterHut.id,
+                assignedBuildingId = woodcutterCamp.id,
                 posX = 6.5f,
                 posY = 12.5f,
                 tunicColorHex = 0xFF8D7B68,
                 statusMessage = "Menebang dahan pohon untuk perapian"
             ),
             Villager(
+                id = kaelId,
                 name = "Kael",
                 isFemale = false,
                 ageDays = 27f,
                 job = JobType.MINER,
                 homeBuildingId = townHearth.id,
+                assignedBuildingId = stoneQuarry.id,
                 posX = 12.5f,
                 posY = 12.5f,
                 tunicColorHex = 0xFF607D8B,
                 statusMessage = "Mengumpulkan batu di Tempat Pengumpulan Batu"
             ),
             Villager(
+                id = alaraId,
                 name = "Alara",
                 isFemale = true,
                 ageDays = 22f,
                 job = JobType.BUILDER,
-                homeBuildingId = starterHut.id,
+                homeBuildingId = townHearth.id,
+                assignedBuildingId = null,
                 posX = 9.5f,
                 posY = 9.5f,
                 tunicColorHex = 0xFFC86D3B,
                 statusMessage = "Memeriksa perkakas pembangunan"
             ),
             Villager(
+                id = jarekId,
                 name = "Jarek",
                 isFemale = false,
                 ageDays = 20f,
                 job = JobType.FORAGER,
                 homeBuildingId = townHearth.id,
+                assignedBuildingId = null,
                 posX = 8.5f,
                 posY = 5.5f,
                 tunicColorHex = 0xFF7E57C2,
@@ -646,6 +741,7 @@ class SimulationEngine(private val context: Context? = null) {
                 ageDays = 8f,
                 job = JobType.UNASSIGNED,
                 homeBuildingId = starterHut.id,
+                assignedBuildingId = null,
                 parentIds = listOf(silasId, marthaId),
                 posX = 10.0f,
                 posY = 10.5f,
