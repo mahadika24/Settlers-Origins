@@ -77,6 +77,13 @@ object AiBehaviorSystem {
 
             var v = villager
 
+            // If returning home, entering home, or leaving home, advance movement along path without interruption
+            if (v.action == VillagerAction.RETURNING_HOME || v.action == VillagerAction.ENTERING_HOME || v.action == VillagerAction.LEAVING_HOME) {
+                v = moveVillagerAlongPath(v, dt)
+                updatedVillagers.add(v)
+                continue
+            }
+
             // 1. Check if carrying goods -> Must physically deliver to storage
             if (v.carryingType != CarryType.NONE && v.carryingAmount > 0) {
                 val delRes = ResourceLogisticsSystem.processDelivery(
@@ -271,59 +278,104 @@ object AiBehaviorSystem {
 
                     JobType.BUILDER -> {
                         // Builders work on demolition targets first, then construction sites
-                        val demolitionTarget = currentBuildings.find { it.status == BuildingStatus.DEMOLISHING }
-                        val constructionTarget = currentBuildings.find { !it.isConstructed && it.status == BuildingStatus.UNDER_CONSTRUCTION }
-
-                        if (demolitionTarget != null) {
-                            val dist = Math.abs(v.posX - demolitionTarget.x) + Math.abs(v.posY - demolitionTarget.y)
-                            if (dist <= 1.8f) {
-                                val demoDelta = dt * 15f * v.productivityMultiplier
-                                val demoResult = ConstructionSystem.advanceDemolitionProgress(
-                                    demolitionTarget.id, demoDelta, currentBuildings, currentInv, currentTiles, mapSize
-                                )
-                                currentBuildings = demoResult.updatedBuildings
-                                currentInv = demoResult.updatedInventory
-                                currentTiles = demoResult.updatedTiles
-
-                                if (demoResult.isDestroyed) {
-                                    demolishedBuildingResult = demoResult.demolishedBuilding
-                                    woodSalvagedTotal += demoResult.woodSalvaged
-                                    stoneSalvagedTotal += demoResult.stoneSalvaged
-                                    v = v.copy(action = VillagerAction.IDLE, statusMessage = "Pembongkaran bangunan selesai")
-                                } else {
-                                    val prog = currentBuildings.find { it.id == demolitionTarget.id }?.demolitionProgress ?: 0f
-                                    v = v.copy(action = VillagerAction.DEMOLISHING, statusMessage = "Membongkar bangunan (${prog.toInt()}%)")
-                                }
-                            } else if (v.path.isEmpty()) {
-                                val path = GridPathfinder.findPath(
-                                    v.posX.toInt(), v.posY.toInt(),
-                                    demolitionTarget.x, demolitionTarget.y,
-                                    currentTiles, currentBuildings, currentResources
-                                )
-                                v = v.copy(action = VillagerAction.WALKING_TO, path = path, statusMessage = "Menuju tapak pembongkaran")
+                        val assignedSite = if (v.assignedBuildingId != null) {
+                            currentBuildings.find {
+                                it.id == v.assignedBuildingId &&
+                                (it.status == BuildingStatus.DEMOLISHING || (!it.isConstructed && it.status == BuildingStatus.UNDER_CONSTRUCTION))
                             }
-                        } else if (constructionTarget != null) {
-                            val dist = Math.abs(v.posX - constructionTarget.x) + Math.abs(v.posY - constructionTarget.y)
-                            if (dist <= 1.8f) {
-                                val buildDelta = dt * 18f * v.productivityMultiplier
-                                val (newBld, completed) = ConstructionSystem.advanceBuildingProgress(
-                                    constructionTarget.id, buildDelta, currentBuildings
-                                )
-                                currentBuildings = newBld
-                                if (completed) {
-                                    completedBuilding = constructionTarget
-                                    v = v.copy(action = VillagerAction.IDLE, statusMessage = "Bangunan berhasil diselesaikan!")
-                                } else {
-                                    val prog = newBld.find { it.id == constructionTarget.id }?.constructionProgress ?: 0f
-                                    v = v.copy(action = VillagerAction.BUILDING, statusMessage = "Mendirikan kerangka bangunan (${prog.toInt()}%)")
+                        } else null
+
+                        val activeSite = assignedSite ?: run {
+                            currentBuildings.find { it.status == BuildingStatus.DEMOLISHING && it.assignedWorkerIds.size < it.builderSlots }
+                                ?: currentBuildings.find { it.status == BuildingStatus.DEMOLISHING }
+                                ?: currentBuildings.find { !it.isConstructed && it.status == BuildingStatus.UNDER_CONSTRUCTION && it.assignedWorkerIds.size < it.builderSlots }
+                                ?: currentBuildings.find { !it.isConstructed && it.status == BuildingStatus.UNDER_CONSTRUCTION }
+                        }
+
+                        if (activeSite != null) {
+                            // Synchronize assignment
+                            if (v.assignedBuildingId != activeSite.id) {
+                                v = v.copy(assignedBuildingId = activeSite.id)
+                            }
+                            if (!activeSite.assignedWorkerIds.contains(v.id)) {
+                                currentBuildings = currentBuildings.map {
+                                    if (it.id == activeSite.id) it.copy(assignedWorkerIds = it.assignedWorkerIds + v.id) else it
                                 }
-                            } else if (v.path.isEmpty()) {
+                            }
+
+                            val workerIndex = activeSite.assignedWorkerIds.indexOf(v.id).let { if (it == -1) 0 else it }
+                            val isDemolition = activeSite.status == BuildingStatus.DEMOLISHING
+                            val workPoint = if (isDemolition) {
+                                activeSite.getDemolitionWorkPoint(mapSize, currentTiles, currentBuildings, currentResources, workerIndex)
+                            } else {
+                                activeSite.getConstructionWorkPoint(mapSize, currentTiles, currentBuildings, currentResources, workerIndex)
+                            }
+
+                            val distToWork = Math.abs(v.posX - workPoint.first) + Math.abs(v.posY - workPoint.second)
+
+                            if (distToWork <= 0.6f) {
+                                // Builder is physically AT the exterior work point! Advance work progress.
+                                if (isDemolition) {
+                                    val demoDelta = dt * 15f * v.productivityMultiplier
+                                    val demoResult = ConstructionSystem.advanceDemolitionProgress(
+                                        activeSite.id, demoDelta, currentBuildings, currentInv, currentTiles, mapSize
+                                    )
+                                    currentBuildings = demoResult.updatedBuildings
+                                    currentInv = demoResult.updatedInventory
+                                    currentTiles = demoResult.updatedTiles
+
+                                    if (demoResult.isDestroyed) {
+                                        demolishedBuildingResult = demoResult.demolishedBuilding
+                                        woodSalvagedTotal += demoResult.woodSalvaged
+                                        stoneSalvagedTotal += demoResult.stoneSalvaged
+                                        v = v.copy(action = VillagerAction.IDLE, assignedBuildingId = null, path = emptyList(), statusMessage = "Pembongkaran bangunan selesai")
+                                    } else {
+                                        val prog = currentBuildings.find { it.id == activeSite.id }?.demolitionProgress ?: 0f
+                                        v = v.copy(action = VillagerAction.DEMOLISHING, statusMessage = "Membongkar bangunan (${prog.toInt()}%)")
+                                    }
+                                } else {
+                                    val buildDelta = dt * 18f * v.productivityMultiplier
+                                    val (newBld, completed) = ConstructionSystem.advanceBuildingProgress(
+                                        activeSite.id, buildDelta, currentBuildings
+                                    )
+                                    currentBuildings = newBld
+                                    if (completed) {
+                                        completedBuilding = activeSite
+                                        v = v.copy(action = VillagerAction.IDLE, assignedBuildingId = null, path = emptyList(), statusMessage = "Bangunan berhasil diselesaikan!")
+                                    } else {
+                                        val prog = newBld.find { it.id == activeSite.id }?.constructionProgress ?: 0f
+                                        v = v.copy(action = VillagerAction.BUILDING, statusMessage = "Mendirikan kerangka bangunan (${prog.toInt()}%)")
+                                    }
+                                }
+                            } else if (v.path.isEmpty() || v.path.last() != workPoint) {
+                                // Physically pathfind to work point outside footprint
                                 val path = GridPathfinder.findPath(
                                     v.posX.toInt(), v.posY.toInt(),
-                                    constructionTarget.x, constructionTarget.y,
-                                    currentTiles, currentBuildings, currentResources
+                                    workPoint.first, workPoint.second,
+                                    currentTiles, currentBuildings, currentResources,
+                                    allowTargetBlocked = false
                                 )
-                                v = v.copy(action = VillagerAction.WALKING_TO, path = path, statusMessage = "Menuju tapak konstruksi")
+                                if (path.isNotEmpty()) {
+                                    v = v.copy(
+                                        action = VillagerAction.WALKING_TO,
+                                        path = path,
+                                        statusMessage = if (isDemolition) "Menuju titik pembongkaran" else "Menuju titik konstruksi"
+                                    )
+                                } else {
+                                    val altPath = GridPathfinder.findPathToWorkPoint(
+                                        v.posX.toInt(), v.posY.toInt(),
+                                        activeSite, currentTiles, currentBuildings, currentResources, workerIndex
+                                    )
+                                    if (altPath.isNotEmpty()) {
+                                        v = v.copy(
+                                            action = VillagerAction.WALKING_TO,
+                                            path = altPath,
+                                            statusMessage = if (isDemolition) "Menuju titik pembongkaran" else "Menuju titik konstruksi"
+                                        )
+                                    } else {
+                                        v = wanderAround(v, currentTiles, currentBuildings, currentResources, mapSize)
+                                    }
+                                }
                             }
                         } else {
                             v = wanderAround(v, currentTiles, currentBuildings, currentResources, mapSize)

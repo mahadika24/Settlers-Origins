@@ -42,42 +42,72 @@ object HousingSystem {
         }
 
         // 1. Maintain Family Households & Invalidate Unconstructed/Demolished Homes
+        val currentOccupancy = availableHomes.associate { home ->
+            home.id to villagers.count { v -> v.homeBuildingId == home.id && availableHomes.any { h -> h.id == v.homeBuildingId } }
+        }.toMutableMap()
+
         val updatedVillagers = villagers.map { v ->
             var homeId = v.homeBuildingId
+            var inHome = v.isInHome
+            var curX = v.posX
+            var curY = v.posY
+            var act = v.action
 
             // If current home no longer exists, is unconstructed, or is demolishing -> evict immediately!
             if (homeId != null && availableHomes.none { it.id == homeId }) {
+                if (inHome) {
+                    val oldHome = buildings.find { it.id == homeId }
+                    val exitPos = oldHome?.getEntranceTile(tiles = tiles) ?: Pair(curX.toInt(), curY.toInt())
+                    curX = exitPos.first.toFloat()
+                    curY = exitPos.second.toFloat()
+                    inHome = false
+                    act = VillagerAction.IDLE
+                }
                 homeId = null
             }
 
-            // If baby or child, keep in parents' home if valid
+            // If baby or child, seek parents' home if capacity allows
             if (homeId == null && (v.isBaby || v.isChild) && v.parentIds.isNotEmpty()) {
                 val parentWithHome = villagers.find { v.parentIds.contains(it.id) && it.homeBuildingId != null }
-                if (parentWithHome != null && availableHomes.any { it.id == parentWithHome.homeBuildingId }) {
-                    homeId = parentWithHome.homeBuildingId
+                if (parentWithHome != null) {
+                    val parentHome = availableHomes.find { it.id == parentWithHome.homeBuildingId }
+                    if (parentHome != null && (currentOccupancy[parentHome.id] ?: 0) < parentHome.type.housingCapacity) {
+                        homeId = parentHome.id
+                        currentOccupancy[parentHome.id] = (currentOccupancy[parentHome.id] ?: 0) + 1
+                    }
                 }
             }
 
-            // If adult with partner, keep in partner's home if valid
+            // If adult with partner, seek partner's home if capacity allows
             if (homeId == null && v.isAdult && v.partnerId != null) {
                 val partner = villagers.find { it.id == v.partnerId && it.homeBuildingId != null }
-                if (partner != null && availableHomes.any { it.id == partner.homeBuildingId }) {
-                    homeId = partner.homeBuildingId
+                if (partner != null) {
+                    val partnerHome = availableHomes.find { it.id == partner.homeBuildingId }
+                    if (partnerHome != null && (currentOccupancy[partnerHome.id] ?: 0) < partnerHome.type.housingCapacity) {
+                        homeId = partnerHome.id
+                        currentOccupancy[partnerHome.id] = (currentOccupancy[partnerHome.id] ?: 0) + 1
+                    }
                 }
             }
 
             // If still homeless, seek an available home respecting strict housing capacity
             if (homeId == null && availableHomes.isNotEmpty()) {
                 val availableHome = availableHomes.firstOrNull { home ->
-                    val occupantCount = villagers.count { it.homeBuildingId == home.id }
-                    occupantCount < home.type.housingCapacity
+                    (currentOccupancy[home.id] ?: 0) < home.type.housingCapacity
                 }
                 if (availableHome != null) {
                     homeId = availableHome.id
+                    currentOccupancy[availableHome.id] = (currentOccupancy[availableHome.id] ?: 0) + 1
                 }
             }
 
-            v.copy(homeBuildingId = homeId)
+            v.copy(
+                homeBuildingId = homeId,
+                isInHome = inHome,
+                posX = curX,
+                posY = curY,
+                action = act
+            )
         }.toMutableList()
 
         // 2. Physical Entrance-based Entry / Exit Transitions
@@ -92,13 +122,13 @@ object HousingSystem {
                     DayPhase.DAWN, DayPhase.DAY -> {
                         // Morning: Exit through the valid house entrance tile
                         if (v.isInHome) {
-                            if (v.action == VillagerAction.SLEEPING) {
-                                // Step 1: Transition to LEAVING_HOME
+                            if (v.action == VillagerAction.SLEEPING || v.action == VillagerAction.INSIDE_HOME) {
+                                // Step 1: Transition to LEAVING_HOME (still inside)
                                 updatedVillagers[i] = v.copy(
                                     action = VillagerAction.LEAVING_HOME,
                                     statusMessage = "Membuka pintu dan melangkah keluar rumah"
                                 )
-                            } else {
+                            } else if (v.action == VillagerAction.LEAVING_HOME) {
                                 // Step 2: Step outside at entrance tile
                                 updatedVillagers[i] = v.copy(
                                     isInHome = false,
@@ -106,27 +136,60 @@ object HousingSystem {
                                     posX = entranceX.toFloat(),
                                     posY = entranceY.toFloat(),
                                     path = emptyList(),
-                                    statusMessage = "Bangun pagi dan keluar memulai hari"
+                                    statusMessage = "Bangun pagi dan melangkah keluar memulai hari"
                                 )
                             }
+                        } else if (v.action == VillagerAction.ENTERING_HOME) {
+                            // Caught outside at morning
+                            updatedVillagers[i] = v.copy(
+                                action = VillagerAction.IDLE,
+                                isInHome = false
+                            )
                         }
                     }
                     DayPhase.DUSK -> {
                         // Evening: Begin returning home to the entrance
-                        if (!v.isInHome && v.action != VillagerAction.WALKING_TO && v.action != VillagerAction.DELIVERING) {
+                        if (!v.isInHome && v.action != VillagerAction.DELIVERING) {
                             val distToEntrance = Math.abs(v.posX - entranceX) + Math.abs(v.posY - entranceY)
-                            if (distToEntrance > 0.6f && v.path.isEmpty()) {
-                                val path = GridPathfinder.findPath(
-                                    v.posX.toInt(), v.posY.toInt(),
-                                    entranceX, entranceY,
-                                    tiles, buildings, resources
-                                )
-                                updatedVillagers[i] = v.copy(
-                                    action = VillagerAction.WALKING_TO,
-                                    path = path,
-                                    statusMessage = "Senja tiba, berjalan pulang menuju pintu rumah"
-                                )
+                            if (distToEntrance > 0.6f) {
+                                if (v.action != VillagerAction.RETURNING_HOME || v.path.isEmpty()) {
+                                    val path = GridPathfinder.findPath(
+                                        v.posX.toInt(), v.posY.toInt(),
+                                        entranceX, entranceY,
+                                        tiles, buildings, resources
+                                    )
+                                    updatedVillagers[i] = v.copy(
+                                        action = VillagerAction.RETURNING_HOME,
+                                        path = path,
+                                        statusMessage = "Senja tiba, berjalan pulang menuju pintu rumah"
+                                    )
+                                }
+                            } else {
+                                // Reached doorstep at dusk
+                                if (v.action != VillagerAction.ENTERING_HOME && v.action != VillagerAction.INSIDE_HOME) {
+                                    updatedVillagers[i] = v.copy(
+                                        action = VillagerAction.ENTERING_HOME,
+                                        posX = entranceX.toFloat(),
+                                        posY = entranceY.toFloat(),
+                                        path = emptyList(),
+                                        statusMessage = "Tiba di depan pintu, melangkah masuk ke rumah"
+                                    )
+                                } else if (v.action == VillagerAction.ENTERING_HOME) {
+                                    updatedVillagers[i] = v.copy(
+                                        isInHome = true,
+                                        action = VillagerAction.INSIDE_HOME,
+                                        posX = entranceX.toFloat(),
+                                        posY = entranceY.toFloat(),
+                                        path = emptyList(),
+                                        statusMessage = "Berada di dalam rumah beristirahat"
+                                    )
+                                }
                             }
+                        } else if (v.isInHome) {
+                            updatedVillagers[i] = v.copy(
+                                action = VillagerAction.INSIDE_HOME,
+                                statusMessage = "Berada di dalam rumah menyambut malam"
+                            )
                         }
                     }
                     DayPhase.NIGHT -> {
@@ -155,33 +218,40 @@ object HousingSystem {
                                         statusMessage = "Tidur nyenyak di peraduan dalam rumah"
                                     )
                                 }
-                            } else if (v.path.isEmpty() && v.action != VillagerAction.DELIVERING) {
-                                val path = GridPathfinder.findPath(
-                                    v.posX.toInt(), v.posY.toInt(),
-                                    entranceX, entranceY,
-                                    tiles, buildings, resources
-                                )
-                                updatedVillagers[i] = v.copy(
-                                    action = VillagerAction.WALKING_TO,
-                                    path = path,
-                                    statusMessage = "Malam gelap, bergegas pulang menuju pintu rumah"
-                                )
+                            } else if (v.action != VillagerAction.DELIVERING) {
+                                if (v.action != VillagerAction.RETURNING_HOME || v.path.isEmpty()) {
+                                    val path = GridPathfinder.findPath(
+                                        v.posX.toInt(), v.posY.toInt(),
+                                        entranceX, entranceY,
+                                        tiles, buildings, resources
+                                    )
+                                    updatedVillagers[i] = v.copy(
+                                        action = VillagerAction.RETURNING_HOME,
+                                        path = path,
+                                        statusMessage = "Malam gelap, bergegas pulang menuju pintu rumah"
+                                    )
+                                }
                             }
                         } else {
                             // Already inside home sleeping: recover energy
                             updatedVillagers[i] = v.copy(
                                 action = VillagerAction.SLEEPING,
-                                energy = (v.energy + dt * 10f).coerceAtMost(100f)
+                                energy = (v.energy + dt * 10f).coerceAtMost(100f),
+                                statusMessage = "Tidur nyenyak di peraduan dalam rumah"
                             )
                         }
                     }
                 }
             } else {
                 // Homeless: Cannot enter any house!
+                var curAction = v.action
+                if (curAction == VillagerAction.ENTERING_HOME || curAction == VillagerAction.RETURNING_HOME || curAction == VillagerAction.INSIDE_HOME) {
+                    curAction = if (timeSystem.isNight) VillagerAction.SLEEPING else VillagerAction.IDLE
+                }
                 if (v.isInHome) {
                     updatedVillagers[i] = v.copy(
                         isInHome = false,
-                        action = VillagerAction.IDLE,
+                        action = curAction,
                         statusMessage = "Meninggalkan bangunan yang tidak berlaku"
                     )
                 } else if (timeSystem.isNight) {
@@ -191,6 +261,8 @@ object HousingSystem {
                         energy = (v.energy + dt * 5f).coerceAtMost(100f),
                         statusMessage = "Tidur kedinginan di luar karena tidak memiliki rumah"
                     )
+                } else if (curAction != v.action) {
+                    updatedVillagers[i] = v.copy(action = curAction)
                 }
             }
         }

@@ -30,7 +30,8 @@ enum class BuildingType(
     val maxWorkers: Int,
     val housingCapacity: Int,
     val defaultJob: JobType = JobType.UNASSIGNED,
-    val iconEmoji: String
+    val iconEmoji: String,
+    val builderSlots: Int = 2
 ) {
     TOWN_HEARTH(
         title = "Pusat Desa (Hearth)",
@@ -204,6 +205,8 @@ data class Building(
 
     val isDemolishing: Boolean get() = status == BuildingStatus.DEMOLISHING
 
+    val builderSlots: Int get() = type.builderSlots
+
     // Salvage returns deterministic materials strictly less than original construction cost
     val salvageWood: Int get() = if (type.woodCost > 0) ((type.woodCost * 0.60f).toInt()).coerceIn(1, type.woodCost - 1) else 0
     val salvageStone: Int get() = if (type.stoneCost > 0) ((type.stoneCost * 0.50f).toInt()).coerceIn(1, type.stoneCost - 1) else 0
@@ -212,28 +215,100 @@ data class Building(
         villagers.count { it.homeBuildingId == id && it.isInHome }
 
     /**
+     * Returns all walkable exterior perimeter tiles adjacent to this building's footprint,
+     * ordered deterministically (South/front first, then East, West, North).
+     * Filters out non-walkable tiles, solid building footprints, and blocking rock resources.
+     */
+    fun getPerimeterTiles(
+        mapSize: Int = 22,
+        tiles: Array<Array<WorldTile>>? = null,
+        buildings: List<Building> = emptyList(),
+        resources: List<NaturalResource> = emptyList()
+    ): List<Pair<Int, Int>> {
+        val perimeter = mutableListOf<Pair<Int, Int>>()
+
+        // South edge (front): (x + i, y + height)
+        for (i in 0 until type.width) {
+            perimeter.add(Pair(x + i, y + type.height))
+        }
+        // East edge: (x + width, y + j)
+        for (j in 0 until type.height) {
+            perimeter.add(Pair(x + type.width, y + j))
+        }
+        // West edge: (x - 1, y + j)
+        for (j in 0 until type.height) {
+            perimeter.add(Pair(x - 1, y + j))
+        }
+        // North edge: (x + i, y - 1)
+        for (i in 0 until type.width) {
+            perimeter.add(Pair(x + i, y - 1))
+        }
+
+        // Filter valid & walkable
+        val valid = perimeter.filter { (px, py) ->
+            px in 0 until mapSize && py in 0 until mapSize &&
+            (tiles == null || tiles[px][py].type.isWalkable) &&
+            buildings.none { other ->
+                other.id != id &&
+                px in other.x until (other.x + other.type.width) &&
+                py in other.y until (other.y + other.type.height) &&
+                other.type != BuildingType.WHEAT_FIELD &&
+                other.type != BuildingType.PUMPKIN_PATCH &&
+                other.type != BuildingType.TOWN_HEARTH
+            } &&
+            resources.none { it.x == px && it.y == py && it.type == ResourceType.ROCK }
+        }
+
+        if (valid.isNotEmpty()) return valid
+
+        // Fallback: If all immediately adjacent tiles are blocked, return front clamped
+        val fallbackX = (x + type.width / 2).coerceIn(0, mapSize - 1)
+        val fallbackY = (y + type.height).coerceIn(0, mapSize - 1)
+        return listOf(Pair(fallbackX, fallbackY))
+    }
+
+    /**
      * Deterministic exterior entrance tile outside the footprint of the building.
      */
-    fun getEntranceTile(mapSize: Int = 22, tiles: Array<Array<WorldTile>>? = null): Pair<Int, Int> {
-        val frontX = (x + type.width / 2).coerceIn(0, mapSize - 1)
-        val frontY = (y + type.height).coerceIn(0, mapSize - 1)
-        if (tiles == null || (frontY < mapSize && tiles[frontX][frontY].type.isWalkable)) {
-            return Pair(frontX, frontY)
-        }
-        val northY = y - 1
-        if (northY >= 0 && tiles[frontX][northY].type.isWalkable) {
-            return Pair(frontX, northY)
-        }
-        val eastX = x + type.width
-        val midY = (y + type.height / 2).coerceIn(0, mapSize - 1)
-        if (eastX < mapSize && tiles[eastX][midY].type.isWalkable) {
-            return Pair(eastX, midY)
-        }
-        val westX = x - 1
-        if (westX >= 0 && tiles[westX][midY].type.isWalkable) {
-            return Pair(westX, midY)
-        }
-        return Pair(frontX, frontY)
+    fun getEntranceTile(
+        mapSize: Int = 22,
+        tiles: Array<Array<WorldTile>>? = null,
+        buildings: List<Building> = emptyList(),
+        resources: List<NaturalResource> = emptyList()
+    ): Pair<Int, Int> {
+        val perim = getPerimeterTiles(mapSize, tiles, buildings, resources)
+        return perim.first()
+    }
+
+    fun getWorkplaceEntrance(
+        mapSize: Int = 22,
+        tiles: Array<Array<WorldTile>>? = null,
+        buildings: List<Building> = emptyList(),
+        resources: List<NaturalResource> = emptyList()
+    ): Pair<Int, Int> {
+        return getEntranceTile(mapSize, tiles, buildings, resources)
+    }
+
+    fun getConstructionWorkPoint(
+        mapSize: Int = 22,
+        tiles: Array<Array<WorldTile>>? = null,
+        buildings: List<Building> = emptyList(),
+        resources: List<NaturalResource> = emptyList(),
+        slotIndex: Int = 0
+    ): Pair<Int, Int> {
+        val perim = getPerimeterTiles(mapSize, tiles, buildings, resources)
+        return perim[slotIndex.coerceAtLeast(0) % perim.size]
+    }
+
+    fun getDemolitionWorkPoint(
+        mapSize: Int = 22,
+        tiles: Array<Array<WorldTile>>? = null,
+        buildings: List<Building> = emptyList(),
+        resources: List<NaturalResource> = emptyList(),
+        slotIndex: Int = 0
+    ): Pair<Int, Int> {
+        val perim = getPerimeterTiles(mapSize, tiles, buildings, resources)
+        return perim[(slotIndex.coerceAtLeast(0) + 1) % perim.size]
     }
 }
 
@@ -274,6 +349,7 @@ enum class VillagerAction(val label: String, val emoji: String) {
     IDLE("Bersantai", "🌿"),
     WANDERING("Berjalan Santai", "🚶"),
     WALKING_TO("Menuju Lokasi", "🏃"),
+    RETURNING_HOME("Pulang ke Rumah", "🏠"),
     TILLING("Mengolah Ladang", "🌱"),
     HARVESTING("Memanen Hasil", "🌾"),
     CHOPPING("Menebang Pohon", "🪓"),
@@ -284,6 +360,7 @@ enum class VillagerAction(val label: String, val emoji: String) {
     DELIVERING("Membawa Bahan", "📦"),
     EATING("Menyantap Makanan", "🍞"),
     ENTERING_HOME("Masuk Rumah", "🚪"),
+    INSIDE_HOME("Di Dalam Rumah", "🏠"),
     LEAVING_HOME("Keluar Rumah", "🌅"),
     SLEEPING("Tidur & Beristirahat", "💤"),
     PROCREATING("Bercengkerama di Rumah", "❤️"),

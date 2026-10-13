@@ -31,11 +31,11 @@ object JobSystem {
         val minerCap = activeWorkplaces.filter { it.type.defaultJob == JobType.MINER }.sumOf { it.type.maxWorkers }
         val foragerCap = activeWorkplaces.filter { it.type.defaultJob == JobType.FORAGER }.sumOf { it.type.maxWorkers }
 
-        val activeSiteCount = buildings.count {
+        val activeSites = buildings.filter {
             (!it.isConstructed && it.status == BuildingStatus.UNDER_CONSTRUCTION) ||
             it.status == BuildingStatus.DEMOLISHING
         }
-        val builderCap = maxOf(activeSiteCount * 2, 2)
+        val builderCap = if (activeSites.isEmpty()) 2 else maxOf(activeSites.sumOf { it.builderSlots }, 2)
 
         return mapOf(
             JobType.FARMER to farmCap,
@@ -84,12 +84,19 @@ object JobSystem {
             for (c in candidates) {
                 if (added >= diff) break
 
-                // Find a constructed workplace of this job with available slots
-                val workplace = updatedBuildings.find {
-                    it.isConstructed &&
-                    it.status == BuildingStatus.COMPLETED &&
-                    it.type.defaultJob == job &&
-                    it.assignedWorkerIds.size < it.type.maxWorkers
+                // Find a constructed workplace of this job with available slots, or active site if BUILDER
+                val workplace = if (job == JobType.BUILDER) {
+                    updatedBuildings.find {
+                        ((!it.isConstructed && it.status == BuildingStatus.UNDER_CONSTRUCTION) || it.status == BuildingStatus.DEMOLISHING) &&
+                        it.assignedWorkerIds.size < it.builderSlots
+                    }
+                } else {
+                    updatedBuildings.find {
+                        it.isConstructed &&
+                        it.status == BuildingStatus.COMPLETED &&
+                        it.type.defaultJob == job &&
+                        it.assignedWorkerIds.size < it.type.maxWorkers
+                    }
                 }
 
                 // If job is BUILDER or a valid workplace was found
@@ -225,12 +232,19 @@ object JobSystem {
             val vacancies = cap - currentAssigned
 
             if (vacancies > 0) {
-                // Find a workplace building with available worker slot
-                val workplace = updatedBuildings.find {
-                    it.isConstructed &&
-                    it.status == BuildingStatus.COMPLETED &&
-                    it.type.defaultJob == job &&
-                    it.assignedWorkerIds.size < it.type.maxWorkers
+                // Find a workplace building with available worker slot, or active site if BUILDER
+                val workplace = if (job == JobType.BUILDER) {
+                    updatedBuildings.find {
+                        ((!it.isConstructed && it.status == BuildingStatus.UNDER_CONSTRUCTION) || it.status == BuildingStatus.DEMOLISHING) &&
+                        it.assignedWorkerIds.size < it.builderSlots
+                    }
+                } else {
+                    updatedBuildings.find {
+                        it.isConstructed &&
+                        it.status == BuildingStatus.COMPLETED &&
+                        it.type.defaultJob == job &&
+                        it.assignedWorkerIds.size < it.type.maxWorkers
+                    }
                 }
 
                 val targetBuildingId = workplace?.id

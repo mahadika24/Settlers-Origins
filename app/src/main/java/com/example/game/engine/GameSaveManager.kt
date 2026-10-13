@@ -3,6 +3,7 @@ package com.example.game.engine
 import android.content.Context
 import android.util.Log
 import com.example.game.model.Building
+import com.example.game.model.BuildingStatus
 import com.example.game.model.BuildingType
 import com.example.game.model.CarryType
 import com.example.game.model.CommunityGoal
@@ -38,7 +39,18 @@ object GameSaveManager {
 
     fun saveGame(context: Context, state: GameState): Boolean {
         return try {
-            val root = JSONObject()
+            val root = stateToJson(state)
+            val file = File(context.filesDir, SAVE_FILE_NAME)
+            file.writeText(root.toString())
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal menyimpan permainan: ${e.message}", e)
+            false
+        }
+    }
+
+    fun stateToJson(state: GameState): JSONObject {
+        val root = JSONObject()
 
             // 1. Time & Weather
             val timeObj = JSONObject().apply {
@@ -178,15 +190,7 @@ object GameSaveManager {
                 goalsArray.put(gObj)
             }
             root.put("goals", goalsArray)
-
-            // Write atomically to file
-            val file = File(context.filesDir, SAVE_FILE_NAME)
-            file.writeText(root.toString())
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Gagal menyimpan permainan: ${e.message}", e)
-            false
-        }
+            return root
     }
 
     fun loadGame(context: Context, baseTiles: Array<Array<WorldTile>>): GameState? {
@@ -196,8 +200,15 @@ object GameSaveManager {
         return try {
             val content = file.readText()
             val root = JSONObject(content)
+            stateFromJson(root, baseTiles)
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal memuat save game: ${e.message}", e)
+            null
+        }
+    }
 
-            // 1. Time & Weather
+    fun stateFromJson(root: JSONObject, baseTiles: Array<Array<WorldTile>>): GameState {
+        // 1. Time & Weather
             val timeObj = root.getJSONObject("timeSystem")
             val dayNumber = timeObj.getInt("dayNumber")
             val dayTimeSeconds = timeObj.getDouble("dayTimeSeconds").toFloat()
@@ -267,14 +278,23 @@ object GameSaveManager {
                     for (w in 0 until workersArr.length()) workers.add(workersArr.getString(w))
                 }
 
+                val isConstructed = bObj.optBoolean("isConstructed", true)
+                val statusName = bObj.optString("status", if (isConstructed) BuildingStatus.COMPLETED.name else BuildingStatus.UNDER_CONSTRUCTION.name)
+                val status = try { BuildingStatus.valueOf(statusName) } catch (_: Exception) {
+                    if (isConstructed) BuildingStatus.COMPLETED else BuildingStatus.UNDER_CONSTRUCTION
+                }
+                val demolitionProgress = bObj.optDouble("demolitionProgress", 0.0).toFloat()
+
                 buildingsList.add(
                     Building(
                         id = bObj.getString("id"),
                         type = type,
                         x = bObj.getInt("x"),
                         y = bObj.getInt("y"),
-                        isConstructed = bObj.optBoolean("isConstructed", true),
+                        isConstructed = isConstructed,
                         constructionProgress = bObj.optDouble("constructionProgress", 100.0).toFloat(),
+                        status = status,
+                        demolitionProgress = demolitionProgress,
                         deliveredWood = bObj.optInt("deliveredWood", type.woodCost),
                         deliveredStone = bObj.optInt("deliveredStone", type.stoneCost),
                         assignedWorkerIds = workers,
@@ -387,7 +407,7 @@ object GameSaveManager {
                 }
             }
 
-            GameState(
+            return GameState(
                 tiles = baseTiles,
                 buildings = buildingsList,
                 resources = resourcesList,
@@ -412,9 +432,5 @@ object GameSaveManager {
                 totalBirths = totalBirths,
                 totalDeaths = totalDeaths
             )
-        } catch (e: Exception) {
-            Log.e(TAG, "Gagal memuat save game: ${e.message}", e)
-            null
-        }
     }
 }

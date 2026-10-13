@@ -49,9 +49,8 @@ object GridPathfinder {
 
         var foundGoal: Pair<Int, Int>? = null
 
-        // Check if destination itself is an obstacle, but we want to reach adjacent tile
+        // Check if destination itself is an obstacle, but caller asked to stop adjacent
         val isDestWalkable = isTileWalkable(clampedDestX, clampedDestY, tiles, buildings, resources)
-        val targetIsWalkable = isDestWalkable || !allowTargetBlocked
 
         while (queue.isNotEmpty()) {
             val current = queue.poll() ?: break
@@ -62,7 +61,7 @@ object GridPathfinder {
             }
 
             // If the destination itself is not walkable (e.g. a Tree or solid Building wall),
-            // arriving at an adjacent walkable tile counts as success!
+            // arriving at an adjacent walkable tile counts as success when allowTargetBlocked = true!
             if (!isDestWalkable && allowTargetBlocked) {
                 val dist = Math.abs(current.first - clampedDestX) + Math.abs(current.second - clampedDestY)
                 if (dist == 1) {
@@ -76,8 +75,8 @@ object GridPathfinder {
                 val ny = current.second + dir.second
 
                 if (nx in 0 until mapWidth && ny in 0 until mapHeight && !visited[nx][ny]) {
-                    val isGoalCell = (nx == clampedDestX && ny == clampedDestY)
-                    val walkable = isTileWalkable(nx, ny, tiles, buildings, resources) || (isGoalCell && allowTargetBlocked)
+                    // Only traverse strictly walkable tiles; NEVER step into an unwalkable obstacle cell!
+                    val walkable = isTileWalkable(nx, ny, tiles, buildings, resources)
 
                     if (walkable) {
                         visited[nx][ny] = true
@@ -105,6 +104,93 @@ object GridPathfinder {
         return path
     }
 
+    /**
+     * Explicit pathfinding to a known walkable tile. If the target is unwalkable, finds a path
+     * to the nearest walkable tile adjacent to the destination.
+     */
+    fun findPathToWalkableTile(
+        startX: Int,
+        startY: Int,
+        destX: Int,
+        destY: Int,
+        tiles: Array<Array<WorldTile>>,
+        buildings: List<Building>,
+        resources: List<NaturalResource>
+    ): List<Pair<Int, Int>> {
+        if (!isTileWalkable(destX, destY, tiles, buildings, resources)) {
+            val adjacent = findNearestWalkableTileAdjacentTo(destX, destY, tiles, buildings, resources) ?: return emptyList()
+            return findPath(startX, startY, adjacent.first, adjacent.second, tiles, buildings, resources, allowTargetBlocked = false)
+        }
+        return findPath(startX, startY, destX, destY, tiles, buildings, resources, allowTargetBlocked = false)
+    }
+
+    /**
+     * Explicit pathfinding to a building's designated exterior entrance.
+     */
+    fun findPathToBuildingEntrance(
+        startX: Int,
+        startY: Int,
+        building: Building,
+        tiles: Array<Array<WorldTile>>,
+        buildings: List<Building>,
+        resources: List<NaturalResource>
+    ): List<Pair<Int, Int>> {
+        val entrance = building.getEntranceTile(tiles.size, tiles, buildings, resources)
+        return findPathToWalkableTile(startX, startY, entrance.first, entrance.second, tiles, buildings, resources)
+    }
+
+    /**
+     * Explicit pathfinding to a walkable tile adjacent to a target coordinate.
+     */
+    fun findPathToAdjacentTile(
+        startX: Int,
+        startY: Int,
+        targetX: Int,
+        targetY: Int,
+        tiles: Array<Array<WorldTile>>,
+        buildings: List<Building>,
+        resources: List<NaturalResource>
+    ): List<Pair<Int, Int>> {
+        val adj = findNearestWalkableTileAdjacentTo(targetX, targetY, tiles, buildings, resources) ?: return emptyList()
+        return findPath(startX, startY, adj.first, adj.second, tiles, buildings, resources, allowTargetBlocked = false)
+    }
+
+    /**
+     * Explicit pathfinding to a building's exterior work point (construction, demolition, or workplace).
+     */
+    fun findPathToWorkPoint(
+        startX: Int,
+        startY: Int,
+        building: Building,
+        tiles: Array<Array<WorldTile>>,
+        buildings: List<Building>,
+        resources: List<NaturalResource>,
+        slotIndex: Int = 0
+    ): List<Pair<Int, Int>> {
+        val workPoint = if (building.isDemolishing) {
+            building.getDemolitionWorkPoint(tiles.size, tiles, buildings, resources, slotIndex)
+        } else if (!building.isConstructed) {
+            building.getConstructionWorkPoint(tiles.size, tiles, buildings, resources, slotIndex)
+        } else {
+            building.getWorkplaceEntrance(tiles.size, tiles, buildings, resources)
+        }
+        val directPath = findPath(startX, startY, workPoint.first, workPoint.second, tiles, buildings, resources, allowTargetBlocked = false)
+        if (directPath.isNotEmpty() || (startX == workPoint.first && startY == workPoint.second)) {
+            return directPath
+        }
+
+        // Fallback: evaluate other available perimeter tiles
+        val perimeter = building.getPerimeterTiles(tiles.size, tiles, buildings, resources)
+        for (candidate in perimeter) {
+            if (candidate == workPoint) continue
+            val altPath = findPath(startX, startY, candidate.first, candidate.second, tiles, buildings, resources, allowTargetBlocked = false)
+            if (altPath.isNotEmpty() || (startX == candidate.first && startY == candidate.second)) {
+                return altPath
+            }
+        }
+        return emptyList()
+    }
+
     fun isTileWalkable(
         x: Int,
         y: Int,
@@ -130,7 +216,7 @@ object GridPathfinder {
                 if (b.type == BuildingType.WHEAT_FIELD || b.type == BuildingType.PUMPKIN_PATCH || b.type == BuildingType.TOWN_HEARTH) {
                     return true
                 }
-                // Other completed buildings are solid
+                // Other completed or under-construction buildings are solid
                 return false
             }
         }

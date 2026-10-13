@@ -167,13 +167,20 @@ object ConstructionSystem {
             } else b
         }
 
+        val entrance = target.getEntranceTile()
         val updatedVillagers = villagers.map { v ->
             var updatedV = v
             // Evict if resident
             if (updatedV.homeBuildingId == buildingId) {
+                val newPosX = if (updatedV.isInHome) entrance.first.toFloat() else updatedV.posX
+                val newPosY = if (updatedV.isInHome) entrance.second.toFloat() else updatedV.posY
                 updatedV = updatedV.copy(
+                    posX = newPosX,
+                    posY = newPosY,
                     homeBuildingId = null,
                     isInHome = false,
+                    path = if (updatedV.isInHome) emptyList() else updatedV.path,
+                    action = if (updatedV.isInHome) VillagerAction.IDLE else updatedV.action,
                     housingNeed = (updatedV.housingNeed - 20f).coerceAtLeast(0f),
                     statusMessage = "Kehilangan rumah karena bangunan dibongkar"
                 )

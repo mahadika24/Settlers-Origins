@@ -948,6 +948,10 @@ private fun DrawScope.drawVillager(
     val bubbleIcon = when {
         v.hunger < 25f -> "⚠️"
         v.action == VillagerAction.SLEEPING -> "💤"
+        v.action == VillagerAction.RETURNING_HOME -> "🏠"
+        v.action == VillagerAction.ENTERING_HOME -> "🚪"
+        v.action == VillagerAction.INSIDE_HOME -> "🏠"
+        v.action == VillagerAction.LEAVING_HOME -> "🌅"
         v.action == VillagerAction.EATING -> "🍞"
         v.action == VillagerAction.HARVESTING -> "🌾"
         v.action == VillagerAction.CHOPPING -> "🪓"
